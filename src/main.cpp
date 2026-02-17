@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////
 //
-//  SUTD Course 50.017 — CS2 Volumetric Smoke (OpenGL 4.3)
+//  SUTD Course 50.017 - CS2 Volumetric Smoke (OpenGL 4.3)
 //
 ////////////////////////////////////////////////////////////////////////
 
@@ -24,6 +24,7 @@
 #include "FullscreenQuad.h"
 #include "Voxelizer.h"
 #include "VoxelDebug.h"
+#include "FloodFill.h"
 
 using namespace std;
 
@@ -88,37 +89,43 @@ void APIENTRY glDebugOutput(GLenum source, GLenum type, unsigned int id,
 unsigned int winWidth  = 800;
 unsigned int winHeight = 600;
 
-// Camera
-glm::vec3 camera_position = glm::vec3 (0.0f, 0.0f, 15.0f);
-glm::vec3 camera_target = glm::vec3(0.0f, 0.0f, 0.0f);
+// Orbit camera
+float camYaw = 45.0f;       // horizontal angle (degrees)
+float camPitch = 35.0f;     // vertical angle (degrees)
+float camDist = 18.0f;      // distance from target
+glm::vec3 camera_target = glm::vec3(0.0f, 2.0f, 0.0f);
 glm::vec3 camera_up = glm::vec3(0.0f, 1.0f, 0.0f);
-float camera_fovy = 45.0f;    
+float camera_fovy = 45.0f;
 glm::mat4 projection;
 
-// Mouse interaction 
+glm::vec3 getCameraPosition() {
+    float yawRad = glm::radians(camYaw);
+    float pitchRad = glm::radians(camPitch);
+    float x = camDist * cos(pitchRad) * sin(yawRad);
+    float y = camDist * sin(pitchRad);
+    float z = camDist * cos(pitchRad) * cos(yawRad);
+    return camera_target + glm::vec3(x, y, z);
+}
+
+// Mouse interaction
 bool leftMouseButtonHold = false;
+bool middleMouseButtonHold = false;
 bool isFirstMouse = true;
 float prevMouseX;
 float prevMouseY;
- glm::mat4 modelMatrix = glm::mat4(1.0f);
-
- // Mesh color table
-glm::vec3 colorTable[4] = 
- {
-    glm::vec3(0.6, 1.0, 0.6),
-    glm::vec3(1.0, 0.6, 0.6),
-    glm::vec3(0.6, 0.6, 1.0),
-    glm::vec3(1.0, 1.0, 0.6) 
-};
-
-// Mesh rendering color
-int colorID = 0;
-glm::vec3  meshColor;
 
 // Debug visualization
 bool showNoiseDebug = false;
 float noiseSliceZ = 0.5f;
-bool showVoxelDebug = false;
+bool showVoxelDebug = true;
+
+// Flood fill (global pointers for key_callback access)
+Voxelizer* g_voxelizer = nullptr;
+VoxelFloodFill* g_floodFill = nullptr;
+
+// Timing
+float deltaTime = 0.0f;
+float lastFrameTime = 0.0f;
 
 
 // declaration
@@ -129,144 +136,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 
-
-
-
-
-/******************************************************************************/
-/***************   Functions to be filled in for Assignment 1    **************/
-/***************    IMPORTANT: you ONLY need to work on these    **************/
-/***************                functions in this section        **************/
-/******************************************************************************/
-
-
-// TODO: insert your code in this function for Mesh Loading
-//       1) store vertices and normals in verList with order (v.x, v.y, v.z, n.x, n.y, n.z)
-//       2) store vertex indices of each triangle in triList 
-int LoadInput(vector<float> &verList, vector<unsigned> &triList)
-{
-    ifstream inFile("data/garg.obj");
-    if (!inFile.is_open())
-    {
-        cout << "Failed to open mesh file!" << endl;
-        return -1;
-    }
-
-    // temp storage for the vectors
-    vector<glm::vec3> temp_vertices;
-    vector<glm::vec3> temp_normals;
-
-    string line;
-    while (getline(inFile, line))
-    {
-        stringstream ss(line);
-        string type;
-        ss >> type;
-
-        // Vertex position
-        if (type == "v")
-        {
-            glm::vec3 v;
-            ss >> v.x >> v.y >> v.z;
-            temp_vertices.push_back(v);
-        }
-        // Vertex normal
-        else if (type == "vn")
-        {
-            glm::vec3 n;
-            ss >> n.x >> n.y >> n.z;
-            temp_normals.push_back(n);
-        }
-        // Triangle faces
-        else if (type == "f")
-        {
-            for (int i = 0; i < 3; i++)
-            {
-                string token;
-                ss >> token;   // a/b/c
-
-                stringstream fs(token);
-                string vIdx, tIdx, nIdx;
-
-                getline(fs, vIdx, '/');   // a
-                getline(fs, tIdx, '/');   // b (ignored but its the texture index for future use)
-                getline(fs, nIdx, '/');   // c
-
-                // convert the string to the int
-                int vi = stoi(vIdx) - 1;  // OBJ is 1-based
-                int ni = stoi(nIdx) - 1;
-
-                glm::vec3 v = temp_vertices[vi];
-                glm::vec3 n = temp_normals[ni];
-
-                // Store vertex position + normal
-                verList.push_back(v.x);
-                verList.push_back(v.y);
-                verList.push_back(v.z);
-                verList.push_back(n.x);
-                verList.push_back(n.y);
-                verList.push_back(n.z);
-
-                // Index of the vertex just added
-                triList.push_back((unsigned)(verList.size() / 6 - 1));
-            }
-        }
-    }
-
-    inFile.close();
-    return 0;
-}
-
-// TODO: insert your code in this function for Mesh Coloring
-void SetMeshColor(int &colorID)
-{
-    //colorID = (colorID + 1) % 4;
-    colorID = (colorID + 1) % (sizeof(colorTable)/sizeof(colorTable[0]));
-}
-
-// TODO: insert your code in this function for Mesh Transformation (Rotation)
-void RotateModel(float angle, glm::vec3 axis)
-{
-    float x = axis.x;
-    float y = axis.y;
-    float z = axis.z;
-
-    float c = cos(angle);
-    float s = sin(angle);
-    float t = 1.0f - c;
-
-    glm::mat4 R(1.0f); // start with identity
-
-    R[0][0] = t * x * x + c;      R[1][0] = t * x * y - s * z;    R[2][0] = t * x * z + s * y;
-    R[0][1] = t * x * y + s * z;    R[1][1] = t * y * y + c;      R[2][1] = t * y * z - s * x;
-    R[0][2] = t * x * z - s * y;    R[1][2] = t * y * z + s * x;    R[2][2] = t * z * z + c;
-
-    modelMatrix = R * modelMatrix;
-}
-
-// TODO: insert your code in this function for Mesh Transformation (Translation)
-void TranslateModel(glm::vec3 transVec)
-{
-    glm::mat4 T(1.0f); // start with identity
-
-    T[3][0] = transVec.x;  // last column, first row
-    T[3][1] = transVec.y;  // last column, second row
-    T[3][2] = transVec.z;  // last column, third row
-
-    modelMatrix = T * modelMatrix;
-}
-
-// TODO: insert your code in this function for Mesh Transformation (Scaling)
-void ScaleModel(float scale)
-{
-    glm::mat4 S(1.0f);
-
-    S[0][0] = scale;
-    S[1][1] = scale;
-    S[2][2] = scale;
-
-    modelMatrix = S * modelMatrix;
-}
 
 
 
@@ -302,10 +171,6 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 // ----------------------------------------------------------------------
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
-    if (key == GLFW_KEY_C && action == GLFW_PRESS)
-    {
-        SetMeshColor( colorID );
-    }
     if (key == GLFW_KEY_N && action == GLFW_PRESS)
     {
         showNoiseDebug = !showNoiseDebug;
@@ -324,89 +189,71 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         showVoxelDebug = !showVoxelDebug;
         std::cout << "Voxel debug: " << (showVoxelDebug ? "ON" : "OFF") << std::endl;
     }
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
+    {
+        if (g_floodFill && g_voxelizer) {
+            // Seed at ground level, center of XZ, just above the floor
+            glm::vec3 center = (g_voxelizer->boundsMin + g_voxelizer->boundsMax) * 0.5f;
+            center.y = g_voxelizer->boundsMin.y + g_voxelizer->voxelSize * 2.0f;
+            g_floodFill->seed(center, g_voxelizer->gridSize, g_voxelizer->boundsMin, g_voxelizer->voxelSize);
+        }
+    }
 }
 
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 {
-	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
-    {
-        leftMouseButtonHold = true;
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        leftMouseButtonHold = (action == GLFW_PRESS);
+        if (action == GLFW_PRESS) isFirstMouse = true;
     }
-    else
-    {
-    	leftMouseButtonHold = false;
+    if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+        middleMouseButtonHold = (action == GLFW_PRESS);
+        if (action == GLFW_PRESS) isFirstMouse = true;
     }
 }
 
 
-// glfw: whenever the cursor moves, this callback is called
-// -------------------------------------------------------
 void cursor_pos_callback(GLFWwindow* window, double mouseX, double mouseY)
 {
-	float  dx, dy;
-	float  nx, ny, scale, angle;
-    
+    if (leftMouseButtonHold || middleMouseButtonHold)
+    {
+        if (isFirstMouse) {
+            prevMouseX = (float)mouseX;
+            prevMouseY = (float)mouseY;
+            isFirstMouse = false;
+            return;
+        }
 
-	if ( leftMouseButtonHold )
-	{
-		if (isFirstMouse)
-	    {
-	        prevMouseX = mouseX;
-	        prevMouseY = mouseY;
-	        isFirstMouse = false;
-	    }
+        float dx = (float)(mouseX - prevMouseX);
+        float dy = (float)(mouseY - prevMouseY);
+        prevMouseX = (float)mouseX;
+        prevMouseY = (float)mouseY;
 
-	    else
-	    {
-            if( glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS )
-            {
-                float dx =         _TRANS_FACTOR * (mouseX - prevMouseX);
-                float dy = -1.0f * _TRANS_FACTOR * (mouseY - prevMouseY); // reversed since y-coordinates go from bottom to top
-
-                prevMouseX = mouseX;
-                prevMouseY = mouseY;
-
-                TranslateModel( glm::vec3(dx, dy, 0) );  
-            }
-
-            else
-            {
-                float dx =   mouseX - prevMouseX;
-                float dy = -(mouseY - prevMouseY); // reversed since y-coordinates go from bottom to top
-
-                prevMouseX = mouseX;
-                prevMouseY = mouseY;
-
-               // Rotation
-                nx    = -dy;
-                ny    =  dx;
-                scale = sqrt(nx*nx + ny*ny);
-
-                // We use "ArcBall Rotation" to compute the rotation axis and angle based on the mouse motion
-                nx    = nx / scale;
-                ny    = ny / scale;
-                angle = scale * _ROTATE_FACTOR;
-
-                RotateModel( angle, glm::vec3(nx, ny, 0.0f) );
-            }
-	    }  
-	}  
-
-	else
-	{
-		isFirstMouse = true;
-	}
+        if (leftMouseButtonHold && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
+            // Shift+drag: pan the target
+            glm::vec3 camPos = getCameraPosition();
+            glm::vec3 forward = glm::normalize(camera_target - camPos);
+            glm::vec3 right = glm::normalize(glm::cross(forward, camera_up));
+            glm::vec3 up = glm::normalize(glm::cross(right, forward));
+            float panSpeed = camDist * 0.002f;
+            camera_target -= right * dx * panSpeed;
+            camera_target += up * dy * panSpeed;
+        }
+        else if (leftMouseButtonHold) {
+            // Left drag: orbit rotation
+            camYaw -= dx * 0.3f;
+            camPitch += dy * 0.3f;
+            camPitch = glm::clamp(camPitch, -89.0f, 89.0f);
+        }
+    }
 }
 
 
-// glfw: whenever the mouse scroll wheel scrolls, this callback is called
-// ----------------------------------------------------------------------
 void scroll_callback(GLFWwindow* window, double xOffset, double yOffset)
 {
-	float scale = 1.0f + _SCALE_FACTOR * yOffset;
-
-	ScaleModel( scale ); 
+    camDist -= (float)yOffset * 1.0f;
+    camDist = glm::clamp(camDist, 2.0f, 50.0f);
 }
 
 
@@ -593,45 +440,6 @@ int main()
     // -----------------------------
     glEnable(GL_DEPTH_TEST);
 
-    // build and compile our shader program
-    // ------------------------------------
-    // vertex shader
-    shader myShader;
-    myShader.setUpShader(vertexShaderSource,fragmentShaderSource);
-
-    // Load input mesh data
-    vector<float> verList;          // This is the list of vertices and normals for rendering
-    vector<unsigned> triList;       // This is the list of faces for rendering
-    LoadInput(verList, triList);
-
-    // create buffers/arrays
-    unsigned int VBO, VAO,EBO;
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
-    glGenBuffers(1, &EBO);
-    glBindVertexArray(VAO);
-
-    // load data into vertex buffers
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, verList.size() * sizeof(float), &verList[0], GL_STATIC_DRAW);
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, triList.size() * sizeof(unsigned int), &triList[0], GL_STATIC_DRAW);
-
-    // set the vertex attribute pointers
-    // vertex Positions
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-
-    // vertex normals
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), ((void*)(3* sizeof(float))));
-    glEnableVertexAttribArray(1);
-
-    glBindVertexArray(0);
-
-    // as we only have a single shader, we could also just activate our shader once beforehand if we want to
-    myShader.use();
-
     // --- Worley noise + visualization setup ---
     WorleyNoise worleyNoise;
     worleyNoise.init(128);
@@ -664,12 +472,18 @@ int main()
     shader noiseVisShader;
     noiseVisShader.setUpShader(noiseVisVS, noiseVisFS);
 
-    // --- Voxelizer setup ---
+    // --- Voxelizer setup (procedural test scene) ---
     Voxelizer voxelizer;
-    voxelizer.voxelizeMesh("data/garg.obj", 0.15f);
+    voxelizer.generateTestScene(0.15f, 64);
 
     VoxelDebug voxelDebug;
     voxelDebug.init();
+
+    // --- Flood fill setup ---
+    VoxelFloodFill floodFill;
+    floodFill.init(voxelizer.totalVoxels);
+    g_voxelizer = &voxelizer;
+    g_floodFill = &floodFill;
 
     // render loop
     // -----------
@@ -681,12 +495,20 @@ int main()
 
         // render
         // ------
-        glClearColor(0.95f, 0.95f, 0.95f, 1.0f);
+        glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Generate Worley noise each frame
+        // Timing
         float time = (float)glfwGetTime();
+        deltaTime = time - lastFrameTime;
+        lastFrameTime = time;
+
+        // Generate Worley noise each frame
         worleyNoise.generate(time);
+
+        // Propagate flood fill (8 steps per frame to keep up with radius)
+        floodFill.propagate(8, voxelizer.gridSize, voxelizer.boundsMin,
+                            voxelizer.voxelSize, voxelizer.staticVoxels, deltaTime);
 
         if (showNoiseDebug)
         {
@@ -701,28 +523,15 @@ int main()
         }
         else
         {
-            // Normal scene rendering
-            // view/projection transformations
+            // Voxel scene rendering
+            glm::vec3 camPos = getCameraPosition();
             projection = glm::perspective(glm::radians(camera_fovy), (float)winWidth / (float)winHeight, _Z_NEAR, _Z_FAR);
-            glm::mat4 view = glm::lookAt(camera_position, camera_target, camera_up);
+            glm::mat4 view = glm::lookAt(camPos, camera_target, camera_up);
 
-            myShader.use();
-            myShader.setMat4("projection", projection);
-            myShader.setMat4("view", view);
-            myShader.setMat4("model", modelMatrix);
-            myShader.setVec3("meshColor", colorTable[colorID]);
-            myShader.setVec3("viewPos", camera_position);
-
-            // render the mesh
-            glBindVertexArray(VAO);
-            glDrawElements(GL_TRIANGLES, triList.size(), GL_UNSIGNED_INT, 0);
-            glBindVertexArray(0);
-
-            // Voxel debug overlay
-            if (showVoxelDebug) {
-                voxelDebug.draw(voxelizer.staticVoxels, view, projection,
-                                voxelizer.gridSize, voxelizer.boundsMin, voxelizer.voxelSize);
-            }
+            // Always draw voxels (walls + smoke)
+            voxelDebug.drawWithSmoke(voxelizer.staticVoxels, floodFill.currentBuffer(),
+                                     view, projection,
+                                     voxelizer.gridSize, voxelizer.boundsMin, voxelizer.voxelSize);
         }
 
 
@@ -734,14 +543,14 @@ int main()
 
     // optional: de-allocate all resources once they've outlived their purpose:
     // ------------------------------------------------------------------------
+    g_voxelizer = nullptr;
+    g_floodFill = nullptr;
+    floodFill.destroy();
     voxelizer.destroy();
     voxelDebug.destroy();
     worleyNoise.destroy();
     fsQuad.destroy();
     glDeleteProgram(noiseVisShader.ID);
-    glDeleteVertexArrays(1, &VAO);
-    glDeleteBuffers(1, &VBO);
-    glDeleteProgram(myShader.ID);
 
     // glfw: terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------

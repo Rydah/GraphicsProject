@@ -82,7 +82,7 @@ public:
                   << " = " << totalVoxels << " voxels" << std::endl;
 
         // --- Build triangle SSBO (vec4 for std430 alignment) ---
-        // struct Triangle { vec4 v0, v1, v2; } — 48 bytes each
+        // struct Triangle { vec4 v0, v1, v2; } - 48 bytes each
         struct GPUTriangle {
             glm::vec4 v0, v1, v2;
         };
@@ -130,6 +130,56 @@ public:
         triBuffer.destroy();
         glDeleteProgram(voxCS.ID);
         return true;
+    }
+
+    // Generate a procedural test scene: a room with some interior walls
+    void generateTestScene(float voxSize = 0.15f, int gridDim = 64) {
+        voxelSize = voxSize;
+        gridSize = glm::ivec3(gridDim);
+        totalVoxels = gridDim * gridDim * gridDim;
+
+        // Bounds centered at origin
+        float halfExtent = (gridDim * voxelSize) * 0.5f;
+        boundsMin = glm::vec3(-halfExtent);
+        boundsMax = glm::vec3(halfExtent);
+
+        // Build wall data on CPU
+        std::vector<int> walls(totalVoxels, 0);
+
+        auto flat = [&](int x, int y, int z) {
+            return x + y * gridSize.x + z * gridSize.x * gridSize.y;
+        };
+
+        int N = gridDim;
+
+        for (int z = 0; z < N; z++)
+        for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) {
+            // Outer box with open top (no ceiling at y == N-1)
+            bool isShell = (x == 0 || x == N-1 || y == 0 || z == 0 || z == N-1);
+
+            // Interior wall 1: vertical wall at x=N/3, with a doorway
+            bool wall1 = (x == N/3) && !(y < N/3 && z > N/3 && z < 2*N/3);
+
+            // Interior wall 2: vertical wall at x=2*N/3, with a doorway
+            bool wall2 = (x == 2*N/3) && !(y < N/2 && z > N/4 && z < 3*N/4);
+
+            // Interior wall 3: horizontal shelf at y=N/2, partial
+            bool wall3 = (y == N/2) && (x > N/4 && x < 3*N/4) && (z > N/4 && z < 3*N/4);
+
+            if (isShell || wall1 || wall2 || wall3) {
+                walls[flat(x, y, z)] = 1;
+            }
+        }
+
+        // Upload to GPU
+        staticVoxels.allocate(totalVoxels * sizeof(int));
+        staticVoxels.upload(walls);
+
+        int filled = 0;
+        for (int v : walls) if (v != 0) filled++;
+        std::cout << "Test scene: grid " << N << "x" << N << "x" << N
+                  << " = " << totalVoxels << " voxels, " << filled << " walls" << std::endl;
     }
 
     void destroy() {

@@ -32,7 +32,7 @@ float hash(int n) {
     return float(n & 0x7FFFFFFF) / float(0x7FFFFFFF);
 }
 
-// 3D hash from integer cell coords — returns vec3 in [0,1]
+// 3D hash from integer cell coords - returns vec3 in [0,1]
 vec3 hashCell(ivec3 cell, int wrap) {
     // Wrap for tiling
     cell = ((cell % wrap) + wrap) % wrap;

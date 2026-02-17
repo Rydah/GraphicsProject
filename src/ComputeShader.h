@@ -35,8 +35,10 @@ public:
         }
         glDeleteShader(cs);
 
-        // Cache local work group size
-        glGetProgramiv(ID, GL_COMPUTE_WORK_GROUP_SIZE, localSize);
+        // Cache local work group size (only if linked successfully)
+        if (success) {
+            glGetProgramiv(ID, GL_COMPUTE_WORK_GROUP_SIZE, localSize);
+        }
     }
 
     void use() const {
