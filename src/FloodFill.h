@@ -10,14 +10,14 @@
 
 class VoxelFloodFill {
 public:
-    SSBOBuffer pingBuf;   // binding 1: read buffer
-    SSBOBuffer pongBuf;   // binding 2: write buffer
+    SSBOBuffer pingBuf;
+    SSBOBuffer pongBuf;
     bool pingIsSrc = true;
 
-    glm::vec3 seedWorldPos = glm::vec3(0.0f);
-    float maxRadius = 5.0f;
+    int seedFlatIdx = -1;
+    int maxSeedValue = 80;      // max flood distance in voxels
     float elapsedTime = 0.0f;
-    float fillDuration = 4.0f;  // seconds to reach full radius
+    float fillDuration = 4.0f;  // seconds to reach full seed value
     bool active = false;
 
     void init(int totalVoxels) {
@@ -30,57 +30,48 @@ public:
         fillCS.setUp(getFillSource());
     }
 
-    // Seed at a world position - starts the fill
     void seed(glm::vec3 worldPos, glm::ivec3 gridSize, glm::vec3 boundsMin, float voxelSize) {
-        // Convert world pos to grid coord
         glm::ivec3 coord = glm::ivec3(glm::floor((worldPos - boundsMin) / voxelSize));
         coord = glm::clamp(coord, glm::ivec3(0), gridSize - 1);
-        int flatIdx = coord.x + coord.y * gridSize.x + coord.z * gridSize.x * gridSize.y;
+        seedFlatIdx = coord.x + coord.y * gridSize.x + coord.z * gridSize.x * gridSize.y;
 
-        // Clear both buffers
         pingBuf.clear();
         pongBuf.clear();
         pingIsSrc = true;
-
-        // Dispatch seed kernel - writes 255 at the seed voxel
-        SSBOBuffer& dst = pingIsSrc ? pingBuf : pongBuf;
-        dst.bindBase(1);
-
-        seedCS.use();
-        seedCS.setInt("u_SeedIdx", flatIdx);
-        glDispatchCompute(1, 1, 1);
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-
-        seedWorldPos = worldPos;
         elapsedTime = 0.0f;
         active = true;
 
         std::cout << "Flood fill seeded at grid (" << coord.x << ", " << coord.y << ", " << coord.z << ")" << std::endl;
     }
 
-    // Run N propagation steps
     void propagate(int steps, glm::ivec3 gridSize, glm::vec3 boundsMin, float voxelSize,
                    const SSBOBuffer& wallBuf, float dt) {
         if (!active) return;
 
         elapsedTime += dt;
         float t = glm::clamp(elapsedTime / fillDuration, 0.0f, 1.0f);
-        float currentRadius = maxRadius * easeRadius(t);
+        int currentSeedVal = (int)(easeIn(t) * maxSeedValue);
+        if (currentSeedVal < 1) currentSeedVal = 1;
 
         for (int i = 0; i < steps; i++) {
             SSBOBuffer& src = pingIsSrc ? pingBuf : pongBuf;
             SSBOBuffer& dst = pingIsSrc ? pongBuf : pingBuf;
 
-            wallBuf.bindBase(0);  // static walls
-            src.bindBase(1);      // read
-            dst.bindBase(2);      // write
+            // Re-seed: stamp the seed voxel to current growing value each step
+            src.bindBase(1);
+            seedCS.use();
+            seedCS.setInt("u_SeedIdx", seedFlatIdx);
+            seedCS.setInt("u_SeedVal", currentSeedVal);
+            glDispatchCompute(1, 1, 1);
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+            // Propagate
+            wallBuf.bindBase(0);
+            src.bindBase(1);
+            dst.bindBase(2);
 
             fillCS.use();
             fillCS.setIVec3("u_GridSize", gridSize);
-            fillCS.setVec3("u_BoundsMin", boundsMin);
-            fillCS.setFloat("u_VoxelSize", voxelSize);
-            fillCS.setVec3("u_SeedPos", seedWorldPos);
-            fillCS.setFloat("u_MaxRadius", currentRadius);
 
             fillCS.dispatch(gridSize.x, gridSize.y, gridSize.z);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -89,7 +80,6 @@ public:
         }
     }
 
-    // Get the current read buffer (most recent result)
     SSBOBuffer& currentBuffer() {
         return pingIsSrc ? pingBuf : pongBuf;
     }
@@ -112,8 +102,7 @@ private:
     ComputeShader seedCS;
     ComputeShader fillCS;
 
-    // Easing curve from Voxelizer.cs
-    float easeRadius(float x) {
+    float easeIn(float x) {
         if (x < 0.5f)
             return 2.0f * x * x;
         else
@@ -124,10 +113,11 @@ private:
         return R"(
 #version 430 core
 layout(local_size_x = 1) in;
-layout(std430, binding = 1) buffer DstBuf { int dst[]; };
+layout(std430, binding = 1) buffer Buf { int data[]; };
 uniform int u_SeedIdx;
+uniform int u_SeedVal;
 void main() {
-    dst[u_SeedIdx] = 255;
+    data[u_SeedIdx] = max(data[u_SeedIdx], u_SeedVal);
 }
 )";
     }
@@ -142,10 +132,6 @@ layout(std430, binding = 1) readonly buffer SrcBuf  { int src[]; };
 layout(std430, binding = 2) writeonly buffer DstBuf  { int dst[]; };
 
 uniform ivec3 u_GridSize;
-uniform vec3  u_BoundsMin;
-uniform float u_VoxelSize;
-uniform vec3  u_SeedPos;
-uniform float u_MaxRadius;
 
 int flatIdx(ivec3 c) {
     return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
@@ -157,31 +143,15 @@ void main() {
 
     int idx = flatIdx(coord);
 
-    // Walls block propagation
+    // Walls block everything
     if (walls[idx] != 0) {
         dst[idx] = 0;
         return;
     }
 
-    // Hemisphere constraint: only propagate at or above seed Y
-    vec3 worldPos = u_BoundsMin + (vec3(coord) + 0.5) * u_VoxelSize;
-    if (worldPos.y < u_SeedPos.y - u_VoxelSize) {
-        dst[idx] = src[idx];
-        return;
-    }
-
-    // Radius constraint (hemisphere distance from seed)
-    vec3 diff = worldPos - u_SeedPos;
-    float dist = length(diff);
-    if (dist > u_MaxRadius) {
-        dst[idx] = src[idx];  // preserve existing value but don't grow
-        return;
-    }
-
-    // 6-neighbor max + decay
+    // This makes the fill wider than tall (ellipsoid)
     int maxVal = src[idx];
 
-    // Check each neighbor inline to avoid array constructor issues
     ivec3 nc;
     int nIdx;
 
@@ -190,9 +160,9 @@ void main() {
     nc = coord + ivec3(1,0,0);
     if (nc.x < u_GridSize.x) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
     nc = coord + ivec3(0,-1,0);
-    if (nc.y >= 0) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
+    if (nc.y >= 0) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 2); }
     nc = coord + ivec3(0,1,0);
-    if (nc.y < u_GridSize.y) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
+    if (nc.y < u_GridSize.y) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 2); }
     nc = coord + ivec3(0,0,-1);
     if (nc.z >= 0) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
     nc = coord + ivec3(0,0,1);

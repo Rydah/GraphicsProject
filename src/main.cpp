@@ -192,10 +192,13 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
     {
         if (g_floodFill && g_voxelizer) {
-            // Seed at ground level, center of XZ, just above the floor
-            glm::vec3 center = (g_voxelizer->boundsMin + g_voxelizer->boundsMax) * 0.5f;
-            center.y = g_voxelizer->boundsMin.y + g_voxelizer->voxelSize * 2.0f;
-            g_floodFill->seed(center, g_voxelizer->gridSize, g_voxelizer->boundsMin, g_voxelizer->voxelSize);
+            // Seed in corner of first room, near the floor
+            glm::vec3 seedPos = glm::vec3(
+                g_voxelizer->boundsMin.x + g_voxelizer->voxelSize * 5.0f,   // near -x wall
+                g_voxelizer->boundsMin.y + g_voxelizer->voxelSize * 2.0f,   // just above floor
+                g_voxelizer->boundsMin.z + g_voxelizer->voxelSize * 5.0f    // near -z wall
+            );
+            g_floodFill->seed(seedPos, g_voxelizer->gridSize, g_voxelizer->boundsMin, g_voxelizer->voxelSize);
         }
     }
 }
@@ -506,8 +509,8 @@ int main()
         // Generate Worley noise each frame
         worleyNoise.generate(time);
 
-        // Propagate flood fill (8 steps per frame to keep up with radius)
-        floodFill.propagate(8, voxelizer.gridSize, voxelizer.boundsMin,
+        // Propagate flood fill
+        floodFill.propagate(4, voxelizer.gridSize, voxelizer.boundsMin,
                             voxelizer.voxelSize, voxelizer.staticVoxels, deltaTime);
 
         if (showNoiseDebug)
