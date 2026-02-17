@@ -20,6 +20,10 @@
 #include "Texture3D.h"
 #include "Texture2D.h"
 #include "Framebuffer.h"
+#include "WorleyNoise.h"
+#include "FullscreenQuad.h"
+#include "Voxelizer.h"
+#include "VoxelDebug.h"
 
 using namespace std;
 
@@ -110,6 +114,11 @@ glm::vec3 colorTable[4] =
 // Mesh rendering color
 int colorID = 0;
 glm::vec3  meshColor;
+
+// Debug visualization
+bool showNoiseDebug = false;
+float noiseSliceZ = 0.5f;
+bool showVoxelDebug = false;
 
 
 // declaration
@@ -296,6 +305,24 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     if (key == GLFW_KEY_C && action == GLFW_PRESS)
     {
         SetMeshColor( colorID );
+    }
+    if (key == GLFW_KEY_N && action == GLFW_PRESS)
+    {
+        showNoiseDebug = !showNoiseDebug;
+        std::cout << "Noise debug: " << (showNoiseDebug ? "ON" : "OFF") << std::endl;
+    }
+    if (key == GLFW_KEY_UP && (action == GLFW_PRESS || action == GLFW_REPEAT))
+    {
+        noiseSliceZ = glm::min(noiseSliceZ + 0.02f, 1.0f);
+    }
+    if (key == GLFW_KEY_DOWN && (action == GLFW_PRESS || action == GLFW_REPEAT))
+    {
+        noiseSliceZ = glm::max(noiseSliceZ - 0.02f, 0.0f);
+    }
+    if (key == GLFW_KEY_V && action == GLFW_PRESS)
+    {
+        showVoxelDebug = !showVoxelDebug;
+        std::cout << "Voxel debug: " << (showVoxelDebug ? "ON" : "OFF") << std::endl;
     }
 }
 
@@ -602,9 +629,47 @@ int main()
 
     glBindVertexArray(0);
 
-    // as we only have a single shader, we could also just activate our shader once beforehand if we want to 
+    // as we only have a single shader, we could also just activate our shader once beforehand if we want to
     myShader.use();
 
+    // --- Worley noise + visualization setup ---
+    WorleyNoise worleyNoise;
+    worleyNoise.init(128);
+
+    FullscreenQuad fsQuad;
+    fsQuad.init();
+
+    // Noise slice visualization shader
+    const char* noiseVisVS =
+        "#version 430\n"
+        "layout(location = 0) in vec2 aPos;\n"
+        "layout(location = 1) in vec2 aUV;\n"
+        "out vec2 vUV;\n"
+        "void main() {\n"
+        "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
+        "    vUV = aUV;\n"
+        "}\n";
+
+    const char* noiseVisFS =
+        "#version 430\n"
+        "in vec2 vUV;\n"
+        "out vec4 FragColor;\n"
+        "uniform sampler3D u_NoiseTex;\n"
+        "uniform float u_SliceZ;\n"
+        "void main() {\n"
+        "    float n = texture(u_NoiseTex, vec3(vUV, u_SliceZ)).r;\n"
+        "    FragColor = vec4(n, n, n, 1.0);\n"
+        "}\n";
+
+    shader noiseVisShader;
+    noiseVisShader.setUpShader(noiseVisVS, noiseVisFS);
+
+    // --- Voxelizer setup ---
+    Voxelizer voxelizer;
+    voxelizer.voxelizeMesh("data/garg.obj", 0.15f);
+
+    VoxelDebug voxelDebug;
+    voxelDebug.init();
 
     // render loop
     // -----------
@@ -619,23 +684,46 @@ int main()
         glClearColor(0.95f, 0.95f, 0.95f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // view/projection transformations
-        projection = glm::perspective(glm::radians(camera_fovy), (float)winWidth / (float)winHeight, _Z_NEAR, _Z_FAR);
-        glm::mat4 view = glm::lookAt(camera_position, camera_target, camera_up);
+        // Generate Worley noise each frame
+        float time = (float)glfwGetTime();
+        worleyNoise.generate(time);
 
-        glUniformMatrix4fv(glGetUniformLocation(myShader.ID, "projection"), 1, GL_FALSE, &projection[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(myShader.ID, "view"), 1, GL_FALSE, &view[0][0]);
+        if (showNoiseDebug)
+        {
+            // Draw noise slice as fullscreen quad
+            glDisable(GL_DEPTH_TEST);
+            noiseVisShader.use();
+            noiseVisShader.setInt("u_NoiseTex", 0);
+            noiseVisShader.setFloat("u_SliceZ", noiseSliceZ);
+            worleyNoise.texture.bindSampler(0);
+            fsQuad.draw();
+            glEnable(GL_DEPTH_TEST);
+        }
+        else
+        {
+            // Normal scene rendering
+            // view/projection transformations
+            projection = glm::perspective(glm::radians(camera_fovy), (float)winWidth / (float)winHeight, _Z_NEAR, _Z_FAR);
+            glm::mat4 view = glm::lookAt(camera_position, camera_target, camera_up);
 
-        // render the loaded model
-        //glm::vec3 aColor = glm::vec3 (0.6f, 1.0f, 0.6f);
-        glUniformMatrix4fv(glGetUniformLocation(myShader.ID, "model"), 1, GL_FALSE, &modelMatrix[0][0]);
-        glUniform3fv(glGetUniformLocation(myShader.ID, "meshColor"), 1, &colorTable[colorID][0]);
-        glUniform3fv(glGetUniformLocation(myShader.ID, "viewPos"), 1, &camera_position[0]);
+            myShader.use();
+            myShader.setMat4("projection", projection);
+            myShader.setMat4("view", view);
+            myShader.setMat4("model", modelMatrix);
+            myShader.setVec3("meshColor", colorTable[colorID]);
+            myShader.setVec3("viewPos", camera_position);
 
-        // render the triangle
-        glBindVertexArray(VAO);
-        glDrawElements(GL_TRIANGLES, triList.size(), GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
+            // render the mesh
+            glBindVertexArray(VAO);
+            glDrawElements(GL_TRIANGLES, triList.size(), GL_UNSIGNED_INT, 0);
+            glBindVertexArray(0);
+
+            // Voxel debug overlay
+            if (showVoxelDebug) {
+                voxelDebug.draw(voxelizer.staticVoxels, view, projection,
+                                voxelizer.gridSize, voxelizer.boundsMin, voxelizer.voxelSize);
+            }
+        }
 
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
@@ -646,6 +734,11 @@ int main()
 
     // optional: de-allocate all resources once they've outlived their purpose:
     // ------------------------------------------------------------------------
+    voxelizer.destroy();
+    voxelDebug.destroy();
+    worleyNoise.destroy();
+    fsQuad.destroy();
+    glDeleteProgram(noiseVisShader.ID);
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
     glDeleteProgram(myShader.ID);

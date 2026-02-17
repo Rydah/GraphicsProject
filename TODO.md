@@ -96,6 +96,73 @@ cs2-smoke-opengl/
 
 ---
 
+## Why OpenGL Wrappers? — Architecture Explanation
+
+Raw OpenGL is a **C state machine** — you call global functions like `glBindTexture`, `glBufferData`, `glDispatchCompute`, etc. with integer IDs, and it's easy to forget a bind, mismatch a format, or leak a resource. The wrappers exist to turn each OpenGL concept into a self-contained C++ object that manages its own state.
+
+Here's what each wrapper does and **where it gets used in the smoke system**:
+
+### `shader` (shader.h) — Vertex/Fragment Shader Program
+- **What:** Compiles a vertex + fragment shader pair into a linked GPU program. Provides `setMat4`, `setVec3`, etc. to upload uniform values.
+- **Why:** Every draw call needs a shader program. Without a wrapper, you'd repeat 30+ lines of compile/check/link/check boilerplate every time.
+- **Used by:** Scene rendering (Phong shading), full-screen quad passes (upsampling, compositing), debug voxel visualization.
+
+### `ComputeShader` (ComputeShader.h) — Compute Shader Program
+- **What:** Compiles a single compute shader, caches its local work group size, and provides `dispatch(totalX, totalY, totalZ)` that automatically does the ceil-division so you don't have to manually calculate `(total + groupSize - 1) / groupSize` every time.
+- **Why:** The smoke system runs **5+ different compute shaders** per frame (voxelize, flood fill, noise, ray march, etc.). Each one needs compile+link+dispatch. The auto ceil-div prevents off-by-one dispatch bugs that cause missing voxels.
+- **Used by:** Voxelizer, FloodFill, WorleyNoise, Raymarcher — basically every GPU simulation step.
+
+### `SSBOBuffer` (Buffer.h) — Shader Storage Buffer Object
+- **What:** Wraps an OpenGL SSBO — a GPU-side array that compute shaders can read/write. Provides `allocate`, `bindBase(point)`, `upload`, `download`, and `clear`.
+- **Why:** The voxel grid is stored as a **flat integer array on the GPU** (one int per voxel, 0-255 density). Compute shaders read/write it using `layout(std430, binding=N)`. We need **3 SSBOs**: one for static walls (read-only after voxelization), and two for smoke density (ping-pong double buffer so we don't read and write the same data in one dispatch). A 4th holds bullet hole data uploaded from CPU each frame.
+- **Used by:**
+  - Binding 0: Static voxel grid (walls) — written by Voxelizer, read by FloodFill
+  - Binding 1-2: Smoke density ping/pong — written/read by FloodFill each step
+  - Binding 3: Bullet holes array — uploaded by CPU, read by FloodFill
+
+### `Texture3D` (Texture3D.h) — 3D Volume Texture
+- **What:** Creates an immutable 3D texture with `glTexStorage3D`. Can be bound as an **image** (for compute shader `imageStore`/`imageLoad`) or as a **sampler** (for `texture()` lookups with hardware trilinear filtering).
+- **Why:** Two key uses:
+  1. **Worley noise volume** (128³, `GL_R16F`): The animated noise texture that gives smoke its cloudy look. Generated each frame by a compute shader, then sampled by the ray marcher.
+  2. The ray marcher could also copy smoke density into a 3D texture for hardware trilinear sampling (smoother than manual 8-corner interpolation in an SSBO).
+- **Why not just use SSBOs for everything?** SSBOs give you raw integer arrays. 3D textures give you **free hardware trilinear interpolation** via `texture()` — critical for smooth-looking volumetric rendering without visible voxel edges.
+
+### `Texture2D` (Texture2D.h) — 2D Texture
+- **What:** Same pattern as Texture3D but for 2D. Used as FBO color/depth attachments and as compute shader image outputs.
+- **Why needed:**
+  - **Ray march output** (half-res `GL_RGBA16F`): RGB = scattered light color, A = transmittance. Written by ray march compute shader.
+  - **Scene depth texture** (`GL_DEPTH_COMPONENT32F`): Rendered by rasterizing scene geometry. Read by ray marcher to know where to stop marching (so smoke appears behind walls).
+  - **Upsampled result** (full-res): The Catmull-Rom upsampler reads the half-res ray march output and writes a full-res version.
+
+### `Framebuffer` (Framebuffer.h) — Frame Buffer Object
+- **What:** An off-screen render target. You attach Texture2D(s) to it, then draw into them instead of the screen.
+- **Why:** The rendering pipeline has multiple passes that don't go directly to screen:
+  1. **Depth-only FBO**: Render scene geometry to get a depth texture (no color needed). Ray marcher reads this to clip rays.
+  2. **Upsample FBO**: Catmull-Rom shader reads half-res smoke, writes full-res result.
+  3. **Composite pass**: Final shader blends scene + smoke → writes to screen (default framebuffer 0).
+- Without FBOs, you can only render to the screen. Multi-pass rendering requires bouncing between off-screen buffers.
+
+### How they all connect (per frame):
+
+```
+CPU: Update flood-fill radius, upload bullet holes
+  ↓
+[ComputeShader] FloodFill reads/writes SSBOs (ping-pong), checks wall SSBO
+  ↓  (memory barrier)
+[ComputeShader] WorleyNoise writes → Texture3D (noise volume)
+  ↓  (memory barrier)
+[Framebuffer+Texture2D] Render scene geometry → depth texture
+  ↓
+[ComputeShader] Raymarcher reads: smoke SSBO + noise Texture3D + depth Texture2D
+                writes: → Texture2D (half-res RGBA smoke)
+  ↓  (memory barrier)
+[Framebuffer+Shader] Upsample: reads half-res Texture2D → writes full-res Texture2D
+  ↓
+[Shader] Composite: reads scene color + full-res smoke → draws to screen
+```
+
+---
+
 ## CMakeLists.txt Skeleton
 
 ```cmake
