@@ -9,7 +9,7 @@
 
 
 const char *vertexShaderSource =
-        "#version 330\n"
+        "#version 430\n"
         "uniform mat4 model;\n"
         "uniform mat4 view;\n"
         "uniform mat4 projection;\n"
@@ -30,7 +30,7 @@ const char *vertexShaderSource =
 
 
 const char *fragmentShaderSource =
-        "#version 330\n"
+        "#version 430\n"
         "uniform vec3 viewPos;\n"
         "in vec3 ocolor;\n"
         "in vec3 facenormal;\n"

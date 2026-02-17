@@ -1,14 +1,8 @@
 ////////////////////////////////////////////////////////////////////////
 //
-//
-//  Assignment 1 of SUTD Course 50.017
-//
-//    Mesh Viewer
-//
-//
+//  SUTD Course 50.017 — CS2 Volumetric Smoke (OpenGL 4.3)
 //
 ////////////////////////////////////////////////////////////////////////
-
 
 #include <iostream>
 #include <sstream>
@@ -21,9 +15,53 @@
 
 #include "shaderSource.h"
 #include "shader.h"
-
+#include "ComputeShader.h"
+#include "Buffer.h"
+#include "Texture3D.h"
+#include "Texture2D.h"
+#include "Framebuffer.h"
 
 using namespace std;
+
+///  OpenGL debug callback  ///
+void APIENTRY glDebugOutput(GLenum source, GLenum type, unsigned int id,
+                            GLenum severity, GLsizei length,
+                            const char* message, const void* userParam)
+{
+    // Ignore non-significant codes
+    if (id == 131169 || id == 131185 || id == 131218 || id == 131204) return;
+
+    std::cout << "GL DEBUG [" << id << "]: " << message << std::endl;
+
+    switch (source) {
+        case GL_DEBUG_SOURCE_API:             std::cout << "  Source: API"; break;
+        case GL_DEBUG_SOURCE_WINDOW_SYSTEM:   std::cout << "  Source: Window System"; break;
+        case GL_DEBUG_SOURCE_SHADER_COMPILER: std::cout << "  Source: Shader Compiler"; break;
+        case GL_DEBUG_SOURCE_THIRD_PARTY:     std::cout << "  Source: Third Party"; break;
+        case GL_DEBUG_SOURCE_APPLICATION:      std::cout << "  Source: Application"; break;
+        case GL_DEBUG_SOURCE_OTHER:           std::cout << "  Source: Other"; break;
+    }
+    std::cout << std::endl;
+
+    switch (type) {
+        case GL_DEBUG_TYPE_ERROR:               std::cout << "  Type: Error"; break;
+        case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: std::cout << "  Type: Deprecated"; break;
+        case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:  std::cout << "  Type: Undefined Behavior"; break;
+        case GL_DEBUG_TYPE_PORTABILITY:         std::cout << "  Type: Portability"; break;
+        case GL_DEBUG_TYPE_PERFORMANCE:         std::cout << "  Type: Performance"; break;
+        case GL_DEBUG_TYPE_MARKER:              std::cout << "  Type: Marker"; break;
+        case GL_DEBUG_TYPE_OTHER:               std::cout << "  Type: Other"; break;
+    }
+    std::cout << std::endl;
+
+    switch (severity) {
+        case GL_DEBUG_SEVERITY_HIGH:         std::cout << "  Severity: HIGH"; break;
+        case GL_DEBUG_SEVERITY_MEDIUM:       std::cout << "  Severity: Medium"; break;
+        case GL_DEBUG_SEVERITY_LOW:          std::cout << "  Severity: Low"; break;
+        case GL_DEBUG_SEVERITY_NOTIFICATION: std::cout << "  Severity: Notification"; break;
+    }
+    std::cout << "\n" << std::endl;
+}
 
 
 #define MAX_BUFFER_SIZE            1024
@@ -356,9 +394,10 @@ int main()
     // glfw: initialize and configure
     // ------------------------------
     glfwInit();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
@@ -366,7 +405,7 @@ int main()
 
     // glfw window creation
     // --------------------
-    GLFWwindow* window = glfwCreateWindow(winWidth, winHeight, "Assignment 1 - Mesh Viewer", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(winWidth, winHeight, "CS2 Volumetric Smoke", NULL, NULL);
     if (window == NULL)
     {
         std::cout << "Failed to create GLFW window" << std::endl;
@@ -389,6 +428,138 @@ int main()
     {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
+    }
+
+    // Enable OpenGL debug output
+    int flags;
+    glGetIntegerv(GL_CONTEXT_FLAGS, &flags);
+    if (flags & GL_CONTEXT_FLAG_DEBUG_BIT) {
+        glEnable(GL_DEBUG_OUTPUT);
+        glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+        glDebugMessageCallback(glDebugOutput, nullptr);
+        glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
+        std::cout << "OpenGL debug output enabled" << std::endl;
+    }
+
+    // Print OpenGL info and compute capabilities
+    std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
+    std::cout << "Renderer: " << glGetString(GL_RENDERER) << std::endl;
+
+    int workGroupCount[3], workGroupSize[3], workGroupInvocations;
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &workGroupCount[0]);
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 1, &workGroupCount[1]);
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 2, &workGroupCount[2]);
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &workGroupSize[0]);
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &workGroupSize[1]);
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &workGroupSize[2]);
+    glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &workGroupInvocations);
+    std::cout << "Max compute work group count: " << workGroupCount[0] << ", " << workGroupCount[1] << ", " << workGroupCount[2] << std::endl;
+    std::cout << "Max compute work group size:  " << workGroupSize[0] << ", " << workGroupSize[1] << ", " << workGroupSize[2] << std::endl;
+    std::cout << "Max compute invocations:      " << workGroupInvocations << std::endl;
+
+    // --- Step 2/3 verification: compute shader writes to SSBO, CPU reads back ---
+    {
+        const char* testComputeSrc =
+            "#version 430 core\n"
+            "layout(local_size_x = 64) in;\n"
+            "layout(std430, binding = 0) buffer OutBuf { int data[]; };\n"
+            "void main() {\n"
+            "    uint idx = gl_GlobalInvocationID.x;\n"
+            "    data[idx] = int(idx * idx);\n"
+            "}\n";
+
+        ComputeShader testCS;
+        testCS.setUp(testComputeSrc);
+
+        const int N = 256;
+        SSBOBuffer testBuf;
+        testBuf.allocate(N * sizeof(int));
+        testBuf.clear();
+        testBuf.bindBase(0);
+
+        testCS.dispatch(N);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+        std::vector<int> result = testBuf.download<int>(N);
+        bool pass = true;
+        for (int i = 0; i < N; i++) {
+            if (result[i] != i * i) { pass = false; break; }
+        }
+        std::cout << "Compute shader SSBO test: " << (pass ? "PASSED" : "FAILED") << std::endl;
+
+        testBuf.destroy();
+        glDeleteProgram(testCS.ID);
+    }
+
+    // --- Step 4 verification: imageStore round-trip on 64^3 R16F texture ---
+    {
+        const char* texComputeSrc =
+            "#version 430 core\n"
+            "layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;\n"
+            "layout(binding = 0, r16f) uniform image3D u_Volume;\n"
+            "void main() {\n"
+            "    ivec3 coord = ivec3(gl_GlobalInvocationID);\n"
+            "    ivec3 size = imageSize(u_Volume);\n"
+            "    if (any(greaterThanEqual(coord, size))) return;\n"
+            "    float val = float(coord.x + coord.y + coord.z) / float(size.x + size.y + size.z);\n"
+            "    imageStore(u_Volume, coord, vec4(val));\n"
+            "}\n";
+
+        const char* readbackSrc =
+            "#version 430 core\n"
+            "layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;\n"
+            "layout(binding = 0, r16f) readonly uniform image3D u_Volume;\n"
+            "layout(std430, binding = 0) buffer OutBuf { float data[]; };\n"
+            "uniform ivec3 u_Size;\n"
+            "void main() {\n"
+            "    ivec3 coord = ivec3(gl_GlobalInvocationID);\n"
+            "    if (any(greaterThanEqual(coord, u_Size))) return;\n"
+            "    int idx = coord.x + coord.y * u_Size.x + coord.z * u_Size.x * u_Size.y;\n"
+            "    data[idx] = imageLoad(u_Volume, coord).r;\n"
+            "}\n";
+
+        const int SZ = 64;
+        Texture3D testTex;
+        testTex.create(SZ, SZ, SZ, GL_R16F);
+
+        // Write pass
+        ComputeShader writeCS;
+        writeCS.setUp(texComputeSrc);
+        testTex.bindImage(0, GL_WRITE_ONLY);
+        writeCS.dispatch(SZ, SZ, SZ);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        // Readback pass into SSBO
+        ComputeShader readCS;
+        readCS.setUp(readbackSrc);
+        readCS.use();
+        readCS.setIVec3("u_Size", glm::ivec3(SZ));
+
+        int totalVoxels = SZ * SZ * SZ;
+        SSBOBuffer readBuf;
+        readBuf.allocate(totalVoxels * sizeof(float));
+        readBuf.bindBase(0);
+        testTex.bindImage(0, GL_READ_ONLY);
+
+        readCS.dispatch(SZ, SZ, SZ);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+        std::vector<float> result = readBuf.download<float>(totalVoxels);
+        bool pass = true;
+        float maxSum = float(SZ + SZ + SZ);
+        // Spot-check a few voxels
+        int checks[][3] = {{0,0,0}, {1,2,3}, {32,32,32}, {63,63,63}};
+        for (auto& c : checks) {
+            int idx = c[0] + c[1]*SZ + c[2]*SZ*SZ;
+            float expected = float(c[0]+c[1]+c[2]) / maxSum;
+            if (std::abs(result[idx] - expected) > 0.01f) { pass = false; break; }
+        }
+        std::cout << "Texture3D imageStore test:    " << (pass ? "PASSED" : "FAILED") << std::endl;
+
+        readBuf.destroy();
+        testTex.destroy();
+        glDeleteProgram(writeCS.ID);
+        glDeleteProgram(readCS.ID);
     }
 
     // configure global opengl state
