@@ -15,10 +15,16 @@ public:
     bool pingIsSrc = true;
 
     int seedFlatIdx = -1;
-    int maxSeedValue = 80;      // max flood distance in voxels
+    glm::ivec3 seedCoord = glm::ivec3(0);
+
+    int maxSeedValue = 64;       // maximum flood radius in voxels
     float elapsedTime = 0.0f;
-    float fillDuration = 4.0f;  // seconds to reach full seed value
+    float fillDuration = 4.0f;
     bool active = false;
+
+    // ---- Ellipsoid shape control ----
+    float radiusXZ = 1.5f;   // horizontal scale
+    float radiusY  = 0.6f;   // vertical scale (smaller = flatter)
 
     void init(int totalVoxels) {
         pingBuf.allocate(totalVoxels * sizeof(int));
@@ -30,10 +36,18 @@ public:
         fillCS.setUp(getFillSource());
     }
 
-    void seed(glm::vec3 worldPos, glm::ivec3 gridSize, glm::vec3 boundsMin, float voxelSize) {
-        glm::ivec3 coord = glm::ivec3(glm::floor((worldPos - boundsMin) / voxelSize));
+    void seed(glm::vec3 worldPos, glm::ivec3 gridSize,
+              glm::vec3 boundsMin, float voxelSize) {
+
+        glm::ivec3 coord =
+            glm::ivec3(glm::floor((worldPos - boundsMin) / voxelSize));
+
         coord = glm::clamp(coord, glm::ivec3(0), gridSize - 1);
-        seedFlatIdx = coord.x + coord.y * gridSize.x + coord.z * gridSize.x * gridSize.y;
+
+        seedCoord = coord;
+        seedFlatIdx = coord.x +
+                      coord.y * gridSize.x +
+                      coord.z * gridSize.x * gridSize.y;
 
         pingBuf.clear();
         pongBuf.clear();
@@ -41,11 +55,20 @@ public:
         elapsedTime = 0.0f;
         active = true;
 
-        std::cout << "Flood fill seeded at grid (" << coord.x << ", " << coord.y << ", " << coord.z << ")" << std::endl;
+        std::cout << "Flood fill seeded at grid ("
+                  << coord.x << ", "
+                  << coord.y << ", "
+                  << coord.z << ")"
+                  << std::endl;
     }
 
-    void propagate(int steps, glm::ivec3 gridSize, glm::vec3 boundsMin, float voxelSize,
-                   const SSBOBuffer& wallBuf, float dt) {
+    void propagate(int steps,
+                   glm::ivec3 gridSize,
+                   glm::vec3 boundsMin,
+                   float voxelSize,
+                   const SSBOBuffer& wallBuf,
+                   float dt) {
+
         if (!active) return;
 
         elapsedTime += dt;
@@ -54,10 +77,11 @@ public:
         if (currentSeedVal < 1) currentSeedVal = 1;
 
         for (int i = 0; i < steps; i++) {
+
             SSBOBuffer& src = pingIsSrc ? pingBuf : pongBuf;
             SSBOBuffer& dst = pingIsSrc ? pongBuf : pingBuf;
 
-            // Re-seed: stamp the seed voxel to current growing value each step
+            // ---- Re-seed growing value ----
             src.bindBase(1);
             seedCS.use();
             seedCS.setInt("u_SeedIdx", seedFlatIdx);
@@ -65,13 +89,17 @@ public:
             glDispatchCompute(1, 1, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-            // Propagate
+            // ---- Propagate ----
             wallBuf.bindBase(0);
             src.bindBase(1);
             dst.bindBase(2);
 
             fillCS.use();
             fillCS.setIVec3("u_GridSize", gridSize);
+            fillCS.setIVec3("u_SeedCoord", seedCoord);
+            fillCS.setInt("u_MaxSeedVal", currentSeedVal);
+            fillCS.setFloat("u_RadiusXZ", radiusXZ);
+            fillCS.setFloat("u_RadiusY", radiusY);
 
             fillCS.dispatch(gridSize.x, gridSize.y, gridSize.z);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -129,44 +157,94 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 layout(std430, binding = 0) readonly buffer WallBuf { int walls[]; };
 layout(std430, binding = 1) readonly buffer SrcBuf  { int src[]; };
-layout(std430, binding = 2) writeonly buffer DstBuf  { int dst[]; };
+layout(std430, binding = 2) writeonly buffer DstBuf { int dst[]; };
 
 uniform ivec3 u_GridSize;
+uniform ivec3 u_SeedCoord;
+uniform int   u_MaxSeedVal;
+uniform float u_RadiusXZ;
+uniform float u_RadiusY;
 
 int flatIdx(ivec3 c) {
     return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
 }
 
 void main() {
+
     ivec3 coord = ivec3(gl_GlobalInvocationID);
     if (any(greaterThanEqual(coord, u_GridSize))) return;
 
     int idx = flatIdx(coord);
 
-    // Walls block everything
+    // Block walls
     if (walls[idx] != 0) {
         dst[idx] = 0;
         return;
     }
 
-    // This makes the fill wider than tall (ellipsoid)
+    // ---- Ellipsoid constraint ----
+    vec3 diff = vec3(coord - u_SeedCoord);
+
+    float dx = diff.x / (u_MaxSeedVal * u_RadiusXZ);
+    float dy = diff.y / (u_MaxSeedVal * u_RadiusY);
+    float dz = diff.z / (u_MaxSeedVal * u_RadiusXZ);
+
+    float ellipsoidDist = dx*dx + dy*dy + dz*dz;
+
+    // Outside ellipsoid → kill value
+    if (ellipsoidDist > 1.0) {
+        dst[idx] = 0;
+        return;
+    }
+
+    // ---- Normal propagation ----
     int maxVal = src[idx];
 
     ivec3 nc;
     int nIdx;
 
+    // 6-connected neighbors
     nc = coord + ivec3(-1,0,0);
-    if (nc.x >= 0) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
+    if (nc.x >= 0) {
+        nIdx = flatIdx(nc);
+        if (walls[nIdx] == 0)
+            maxVal = max(maxVal, src[nIdx] - 1);
+    }
+
     nc = coord + ivec3(1,0,0);
-    if (nc.x < u_GridSize.x) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
+    if (nc.x < u_GridSize.x) {
+        nIdx = flatIdx(nc);
+        if (walls[nIdx] == 0)
+            maxVal = max(maxVal, src[nIdx] - 1);
+    }
+
     nc = coord + ivec3(0,-1,0);
-    if (nc.y >= 0) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 2); }
+    if (nc.y >= 0) {
+        nIdx = flatIdx(nc);
+        if (walls[nIdx] == 0)
+            maxVal = max(maxVal, src[nIdx] - 1);
+    }
+
     nc = coord + ivec3(0,1,0);
-    if (nc.y < u_GridSize.y) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 2); }
+    if (nc.y < u_GridSize.y) {
+        nIdx = flatIdx(nc);
+        if (walls[nIdx] == 0)
+            maxVal = max(maxVal, src[nIdx] - 1);
+    }
+
     nc = coord + ivec3(0,0,-1);
-    if (nc.z >= 0) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
+    if (nc.z >= 0) {
+        nIdx = flatIdx(nc);
+        if (walls[nIdx] == 0)
+            maxVal = max(maxVal, src[nIdx] - 1);
+    }
+
     nc = coord + ivec3(0,0,1);
-    if (nc.z < u_GridSize.z) { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
+    if (nc.z < u_GridSize.z) {
+        nIdx = flatIdx(nc);
+        if (walls[nIdx] == 0)
+            maxVal = max(maxVal, src[nIdx] - 1);
+    }
 
     dst[idx] = max(maxVal, 0);
 }
