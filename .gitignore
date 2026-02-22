@@ -18,3 +18,4 @@ Release/
 *.db
 *.opendb
 ipch/
+build/
