@@ -3,6 +3,7 @@
 
 #include "ComputeShader.h"
 #include "Texture3D.h"
+#include "glVersion.h"
 
 class WorleyNoise {
 public:
@@ -13,8 +14,8 @@ public:
         resolution = res;
         texture.create(res, res, res, GL_R16F);
 
-        const char* src = R"(
-#version 430 core
+        const char* src = GLSL_VERSION_CORE 
+        R"(
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 layout(binding = 0, r16f) uniform image3D u_Output;
 

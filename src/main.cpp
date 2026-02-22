@@ -13,6 +13,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "glVersion.h"
 #include "shaderSource.h"
 #include "shader.h"
 #include "ComputeShader.h"
@@ -271,14 +272,16 @@ int main()
     // glfw: initialize and configure
     // ------------------------------
     glfwInit();
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#else
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
-
-#ifdef __APPLE__
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
+glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
     // glfw window creation
     // --------------------
@@ -337,8 +340,8 @@ int main()
     // --- Step 2/3 verification: compute shader writes to SSBO, CPU reads back ---
     {
         const char* testComputeSrc =
-            "#version 430 core\n"
-            "layout(local_size_x = 64) in;\n"
+        GLSL_VERSION_CORE
+        "layout(local_size_x = 64) in;\n"
             "layout(std430, binding = 0) buffer OutBuf { int data[]; };\n"
             "void main() {\n"
             "    uint idx = gl_GlobalInvocationID.x;\n"
@@ -371,7 +374,7 @@ int main()
     // --- Step 4 verification: imageStore round-trip on 64^3 R16F texture ---
     {
         const char* texComputeSrc =
-            "#version 430 core\n"
+            GLSL_VERSION_CORE
             "layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;\n"
             "layout(binding = 0, r16f) uniform image3D u_Volume;\n"
             "void main() {\n"
@@ -383,7 +386,7 @@ int main()
             "}\n";
 
         const char* readbackSrc =
-            "#version 430 core\n"
+            GLSL_VERSION_CORE
             "layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;\n"
             "layout(binding = 0, r16f) readonly uniform image3D u_Volume;\n"
             "layout(std430, binding = 0) buffer OutBuf { float data[]; };\n"
@@ -452,7 +455,7 @@ int main()
 
     // Noise slice visualization shader
     const char* noiseVisVS =
-        "#version 430\n"
+        GLSL_VERSION
         "layout(location = 0) in vec2 aPos;\n"
         "layout(location = 1) in vec2 aUV;\n"
         "out vec2 vUV;\n"
@@ -462,7 +465,7 @@ int main()
         "}\n";
 
     const char* noiseVisFS =
-        "#version 430\n"
+        GLSL_VERSION
         "in vec2 vUV;\n"
         "out vec4 FragColor;\n"
         "uniform sampler3D u_NoiseTex;\n"

@@ -9,6 +9,7 @@
 #include <sstream>
 #include <iostream>
 
+#include "glVersion.h"
 #include "ComputeShader.h"
 #include "Buffer.h"
 
@@ -188,8 +189,8 @@ public:
 
 private:
     const char* getComputeSource() {
-        return R"(
-#version 430 core
+        return GLSL_VERSION_CORE 
+        R"(
 layout(local_size_x = 64) in;
 
 // Triangle buffer: each triangle is 3 x vec4

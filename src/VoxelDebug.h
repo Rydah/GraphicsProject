@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include "shader.h"
 #include "Buffer.h"
+#include "glVersion.h"
 
 class VoxelDebug {
 public:
@@ -37,8 +38,8 @@ public:
         glEnableVertexAttribArray(0);
         glBindVertexArray(0);
 
-        const char* vs = R"(
-#version 430
+        const char* vs = GLSL_VERSION 
+        R"(
 layout(location = 0) in vec3 aPos;
 
 layout(std430, binding = 0) readonly buffer WallBuf  { int walls[]; };
@@ -91,8 +92,8 @@ void main() {
 }
 )";
 
-        const char* fs = R"(
-#version 430
+        const char* fs = GLSL_VERSION 
+        R"(
 flat in int v_Alive;
 in vec3 v_Color;
 in float v_Alpha;

@@ -41,10 +41,17 @@ public:
 
     // Zero-fill using glClearBufferData (GL 4.3)
     void clear() const {
+    #ifdef __APPLE__
+        std::vector<int> zeros(size / sizeof(int), 0);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, ID);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, size, zeros.data());
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    #else
         GLint zero = 0;
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, ID);
         glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32I, GL_RED_INTEGER, GL_INT, &zero);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    #endif
     }
 
     void destroy() {

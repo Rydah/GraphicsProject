@@ -3,13 +3,15 @@
 #ifndef SHADERSOURCE_H
 #define SHADERSOURCE_H
 
+#include "glVersion.h"
+
 /******************************************************************************/
 /******************************   Default Shader ******************************/
 /******************************************************************************/
 
 
 const char *vertexShaderSource =
-        "#version 430\n"
+        GLSL_VERSION
         "uniform mat4 model;\n"
         "uniform mat4 view;\n"
         "uniform mat4 projection;\n"
@@ -30,7 +32,7 @@ const char *vertexShaderSource =
 
 
 const char *fragmentShaderSource =
-        "#version 430\n"
+        GLSL_VERSION
         "uniform vec3 viewPos;\n"
         "in vec3 ocolor;\n"
         "in vec3 facenormal;\n"

@@ -8,6 +8,10 @@
 #include "ComputeShader.h"
 #include "Buffer.h"
 
+#include "glVersion.h"
+
+using namespace std;
+
 class VoxelFloodFill {
 public:
     SSBOBuffer pingBuf;
@@ -138,8 +142,7 @@ private:
     }
 
     const char* getSeedSource() {
-        return R"(
-#version 430 core
+    static string src = string(GLSL_VERSION_CORE) + R"(
 layout(local_size_x = 1) in;
 layout(std430, binding = 1) buffer Buf { int data[]; };
 uniform int u_SeedIdx;
@@ -148,11 +151,11 @@ void main() {
     data[u_SeedIdx] = max(data[u_SeedIdx], u_SeedVal);
 }
 )";
+return src.c_str();
     }
 
     const char* getFillSource() {
-        return R"(
-#version 430 core
+    static string src = string(GLSL_VERSION_CORE) + R"(
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 layout(std430, binding = 0) readonly buffer WallBuf { int walls[]; };
@@ -249,6 +252,7 @@ void main() {
     dst[idx] = max(maxVal, 0);
 }
 )";
+return src.c_str();
     }
 };
 
