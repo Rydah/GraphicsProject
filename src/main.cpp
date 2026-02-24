@@ -119,6 +119,7 @@ float prevMouseY;
 bool showNoiseDebug = false;
 float noiseSliceZ = 0.5f;
 bool showVoxelDebug = true;
+bool showDepthDebug = false;
 
 // Flood fill (global pointers for key_callback access)
 Voxelizer* g_voxelizer = nullptr;
@@ -189,6 +190,11 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     {
         showVoxelDebug = !showVoxelDebug;
         std::cout << "Voxel debug: " << (showVoxelDebug ? "ON" : "OFF") << std::endl;
+    }
+    if (key == GLFW_KEY_D && action == GLFW_PRESS) 
+    {
+    showDepthDebug = !showDepthDebug;
+    std::cout << "Depth debug: " << (showDepthDebug ? "ON" : "OFF") << std::endl;
     }
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
     {
@@ -478,6 +484,102 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     shader noiseVisShader;
     noiseVisShader.setUpShader(noiseVisVS, noiseVisFS);
 
+    // --- Scene Depth FBO setup ---
+    Texture2D depthTex;
+    depthTex.create(winWidth, winHeight, GL_DEPTH_COMPONENT32F);
+
+    Framebuffer depthFBO;
+    depthFBO.create();
+    depthFBO.attachDepth(depthTex.ID);
+    depthFBO.setDepthOnly();
+
+    if (!depthFBO.isComplete()) {
+        std::cout << "Depth FBO setup failed!" << std::endl;
+    }
+
+    // Depth-only shader
+    const char* depthVS =
+        GLSL_VERSION_CORE
+        "layout(location = 0) in vec3 aPos;\n"
+        "uniform mat4 u_MVP;\n"
+        "void main() { gl_Position = u_MVP * vec4(aPos, 1.0); }\n";
+
+    const char* depthFS =
+        GLSL_VERSION
+        "void main() {}\n";
+
+    shader depthShader;
+    depthShader.setUpShader(depthVS, depthFS);
+
+    // --- Depth debug visualization shader ---
+const char* depthDebugVS =
+    GLSL_VERSION_CORE
+    "layout(location = 0) in vec2 aPos;\n"
+    "layout(location = 1) in vec2 aUV;\n"
+    "out vec2 vUV;\n"
+    "void main() { gl_Position = vec4(aPos, 0.0, 1.0); vUV = aUV; }\n";
+
+    const char* depthDebugFS =
+        GLSL_VERSION_CORE
+        "in vec2 vUV;\n"
+        "out vec4 FragColor;\n"
+        "uniform sampler2D u_DepthTex;\n"
+        "uniform float u_Near;\n"
+        "uniform float u_Far;\n"
+        "void main() {\n"
+        "    float d = texture(u_DepthTex, vUV).r;\n"
+        "    float linear = (2.0 * u_Near) / (u_Far + u_Near - d * (u_Far - u_Near));\n"
+        "    FragColor = vec4(vec3(linear), 1.0);\n"
+        "}\n";
+
+    shader depthDebugShader;
+    depthDebugShader.setUpShader(depthDebugVS, depthDebugFS);
+
+    // --- Simple floor + walls geometry for depth verification ---
+    float roomVerts[] = {
+        // Floor (y = 0)
+        -5.0f, 0.0f, -5.0f,
+        5.0f, 0.0f, -5.0f,
+        5.0f, 0.0f,  5.0f,
+        -5.0f, 0.0f,  5.0f,
+
+        // Back wall (z = -5)
+        -5.0f, 0.0f, -5.0f,
+        5.0f, 0.0f, -5.0f,
+        5.0f, 5.0f, -5.0f,
+        -5.0f, 5.0f, -5.0f,
+
+        // Left wall (x = -5)
+        -5.0f, 0.0f, -5.0f,
+        -5.0f, 0.0f,  5.0f,
+        -5.0f, 5.0f,  5.0f,
+        -5.0f, 5.0f, -5.0f,
+    };
+
+    unsigned int roomIndices[] = {
+        // Floor
+        0, 1, 2,  0, 2, 3,
+        // Back wall
+        4, 5, 6,  4, 6, 7,
+        // Left wall
+        8, 9, 10,  8, 10, 11,
+    };
+
+    unsigned int roomVAO, roomVBO, roomEBO;
+    glGenVertexArrays(1, &roomVAO);
+    glGenBuffers(1, &roomVBO);
+    glGenBuffers(1, &roomEBO);
+
+    glBindVertexArray(roomVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, roomVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(roomVerts), roomVerts, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, roomEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(roomIndices), roomIndices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
+
     // --- Voxelizer setup (procedural test scene) ---
     Voxelizer voxelizer;
     voxelizer.generateTestScene(0.15f, 64);
@@ -499,6 +601,24 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         // -----
         processInput(window);
 
+        // Render scene depth
+        depthFBO.bind();
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+
+        glm::vec3 camPos = getCameraPosition();
+        projection = glm::perspective(glm::radians(camera_fovy),
+            (float)winWidth / (float)winHeight, _Z_NEAR, _Z_FAR);
+        glm::mat4 view = glm::lookAt(camPos, camera_target, camera_up);
+        glm::mat4 MVP = projection * view; // no model transform for now
+
+        depthShader.use();
+        depthShader.setMat4("u_MVP", MVP);
+        glBindVertexArray(roomVAO);
+        glDrawElements(GL_TRIANGLES, 18, GL_UNSIGNED_INT, 0);
+        glBindVertexArray(0);
+        Framebuffer::unbind();
+
         // render
         // ------
         glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
@@ -515,8 +635,18 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         // Propagate flood fill
         floodFill.propagate(4, voxelizer.gridSize, voxelizer.boundsMin,
                             voxelizer.voxelSize, voxelizer.staticVoxels, deltaTime);
-
-        if (showNoiseDebug)
+        if (showDepthDebug)
+        {
+            glDisable(GL_DEPTH_TEST);
+            depthDebugShader.use();
+            depthDebugShader.setInt("u_DepthTex", 0);
+            depthDebugShader.setFloat("u_Near", _Z_NEAR);
+            depthDebugShader.setFloat("u_Far", _Z_FAR);
+            depthTex.bindSampler(0);
+            fsQuad.draw();
+            glEnable(GL_DEPTH_TEST);
+        }
+        else if (showNoiseDebug)
         {
             // Draw noise slice as fullscreen quad
             glDisable(GL_DEPTH_TEST);
@@ -529,11 +659,6 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         }
         else
         {
-            // Voxel scene rendering
-            glm::vec3 camPos = getCameraPosition();
-            projection = glm::perspective(glm::radians(camera_fovy), (float)winWidth / (float)winHeight, _Z_NEAR, _Z_FAR);
-            glm::mat4 view = glm::lookAt(camPos, camera_target, camera_up);
-
             // Always draw voxels (walls + smoke)
             voxelDebug.drawWithSmoke(voxelizer.staticVoxels, floodFill.currentBuffer(),
                                      view, projection,
@@ -558,8 +683,16 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     fsQuad.destroy();
     glDeleteProgram(noiseVisShader.ID);
 
-    // glfw: terminate, clearing all previously allocated GLFW resources.
+    // glfw: cleanup and terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------
+    depthTex.destroy();
+    depthFBO.destroy();
+    glDeleteVertexArrays(1, &roomVAO);
+    glDeleteBuffers(1, &roomVBO);
+    glDeleteBuffers(1, &roomEBO);
+    glDeleteProgram(depthShader.ID);
+    glDeleteProgram(depthDebugShader.ID);
+
     glfwTerminate();
     return 0;
 }
