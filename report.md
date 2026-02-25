@@ -2,7 +2,6 @@
 
 **Course:** 50.017 Graphics and Visualisation
 **Project:** Real-Time Volumetric Smoke using OpenGL 4.3 Compute Shaders
-**Reference System:** Gunnell, G. (2023). *CS2 Smoke Grenades* [Open-source Unity recreation]. GitHub. https://github.com/GarrettGunnell/CS2-Smoke-Grenades
 
 ---
 
