@@ -131,10 +131,10 @@ private:
     ComputeShader fillCS;
 
     float easeIn(float x) {
-        if (x < 0.5f)
-            return 2.0f * x * x;
-        else
-            return 1.0f - 1.0f / (5.0f * (2.0f * x - 0.8f) + 1.0f);
+        // x^0.25: explosive start (near-vertical slope at t=0),
+        // decelerates aggressively, then crawls through the last ~5-10%.
+        // t=0.01 -> 56%, t=0.50 -> 84%, t=0.90 -> 97%, t=0.95 -> 99%
+        return powf(x, 0.25f);
     }
 
     const char* getSeedSource() {
