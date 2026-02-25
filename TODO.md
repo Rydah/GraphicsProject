@@ -427,18 +427,152 @@ Critical: memory barriers between every GPU→GPU handoff (see barrier table abo
 
 ### Phase 3: Rendering
 
-- [ ] **Step 10 — Volume Ray Marcher**
-  - `raymarch.comp`: 16×16 thread groups, writes to `GL_RGBA16F` image2D (half-res)
-  - Ray setup: reconstruct from `invProj` × `invView` × NDC pixel position
-  - Ray-AABB intersection test for volume bounds
-  - Phase 1 (coarse skip): jump 2× voxelSize until voxel density > 0.001
-  - Phase 2 (fine march): Beer-Lambert accumulation + HG phase + shadow march
-  - Trilinear sampling across 8 SSBO voxels (or 3D texture if copied)
-  - Modulate by Worley noise sample
-  - Clamp ray tMax to scene depth
-  - Output: RGB = scattered light, A = final transmittance
-  - `Raymarcher::render(...)` — call after flood fill + noise each frame
-  - **Verify:** Smoke sphere glows, adjusting `g` changes forward/backward scattering look
+- [ ] **Step 10a — Ray March Core: Beer-Lambert**
+  - `Raymarcher.h`: class with `Texture2D smokeOut` (half-res `GL_RGBA16F`), `ComputeShader marchCS`, and a blit vert+frag shader pair to draw result to screen
+  - `raymarch.comp`: `layout(local_size_x=16, local_size_y=16)`, one thread per half-res pixel
+  - **Ray setup:** reconstruct ray from camera matrices
+    ```glsl
+    vec2 ndc  = (vec2(px) + 0.5) / vec2(u_TexSize) * 2.0 - 1.0;
+    vec4 vDir = u_InvProj * vec4(ndc, -1.0, 1.0);  vDir.w = 0.0;
+    vec3 rayDir = normalize((u_InvView * vDir).xyz);
+    vec3 rayOrigin = u_InvView[3].xyz;   // camera world pos = last column of invView
+    ```
+  - **Ray-AABB slab test** against smoke volume bounds (`u_BoundsMin`, `u_BoundsMax`):
+    ```glsl
+    vec3 t1 = (u_BoundsMin - rayOrigin) / rayDir;
+    vec3 t2 = (u_BoundsMax - rayOrigin) / rayDir;
+    float tEnter = max(max(min(t1.x,t2.x), min(t1.y,t2.y)), min(t1.z,t2.z));
+    float tExit  = min(min(max(t1.x,t2.x), max(t1.y,t2.y)), max(t1.z,t2.z));
+    if (tExit < 0.0 || tEnter > tExit) { imageStore(..., vec4(0)); return; }
+    tEnter = max(tEnter, 0.0);
+    ```
+  - **Trilinear SSBO sampling** — smoke SSBO stores int [0..u_MaxVoxelVal], normalise to [0,1]:
+    ```glsl
+    float sampleSmoke(vec3 worldPos) {
+        vec3 gc = (worldPos - u_BoundsMin) / u_VoxelSize - 0.5;
+        ivec3 c0 = clamp(ivec3(floor(gc)),   ivec3(0), u_GridSize-1);
+        ivec3 c1 = clamp(ivec3(floor(gc))+1, ivec3(0), u_GridSize-1);
+        vec3 t = fract(gc);
+        // read 8 corners: v000..v111 = float(smoke[flatIdx(ivec3(cx,cy,cz))])
+        return trilinear(v000..v111, t) / float(u_MaxVoxelVal);
+    }
+    ```
+  - **Two-phase march:**
+    - Phase 1 (coarse skip): step `u_VoxelSize * 2.0` until `sampleSmoke() > 0.002`, max 96 steps
+    - Phase 2 (fine accumulation): step `u_VoxelSize * 0.5`, max 192 steps
+    - **Beer-Lambert accumulation** (pure extinction, no phase yet):
+      ```glsl
+      float density = sampleSmoke(pos) * u_DensityScale;
+      float stepT   = exp(-density * u_SigmaE * u_StepSize);  // Beer-Lambert per step
+      transmittance *= stepT;
+      color         += vec3(density) * transmittance * u_StepSize;  // placeholder lighting
+      if (transmittance < 0.01) break;                               // early exit
+      ```
+  - Output: `imageStore(u_Output, px, vec4(color, transmittance))`
+    - RGB = accumulated scattered light, A = final transmittance (for later compositor)
+  - **Blit pass:** simple vert+frag that draws `smokeOut` to screen:
+    `fragColor = vec4(bg * smoke.a + smoke.rgb, 1.0)` where bg = sky/background colour
+  - Expose `u_DensityScale` and `u_SigmaE` as CPU-side tweakable floats
+  - `Raymarcher::render(camera, floodFill, voxelizer)` — call each frame after flood fill
+  - `Raymarcher::blit(fsQuad)` — draws result to screen; toggle with R key in main.cpp
+  - **Verify:** Smoke mass visible as grey/white blob; thicker regions correctly darker
+
+- [ ] **Step 10b — Worley Noise Modulation + Domain Warp at Edges**
+  - Bind the existing Worley 128³ `GL_R16F` texture as `sampler3D` (binding 2) in the march shader
+  - **Edge-zone mask:** the stored voxel density IS the Euclidean falloff value [0..1];
+    use it directly to define the "edge zone" (low density = boundary of smoke):
+    ```glsl
+    float rawDensity = sampleSmoke(pos);          // 0..1 Euclidean falloff
+    float edgeMask   = 1.0 - smoothstep(0.0, u_EdgeFadeWidth, rawDensity);
+    // edgeMask = 1 at outer edge (low density), 0 at core (high density)
+    ```
+  - **Domain warp (curl-like):** perturb the noise sample position at edges to create turbulent boundary;
+    use the noise texture itself at a different scale/phase to generate a 3D warp offset:
+    ```glsl
+    vec3 noiseUVW = pos / (u_BoundsMax - u_BoundsMin) + u_Time * 0.04;
+    vec3 warp = vec3(
+        texture(u_NoiseTex, noiseUVW + vec3(0.0,  0.0,  0.0)).r,
+        texture(u_NoiseTex, noiseUVW + vec3(0.43, 0.17, 0.0)).r,
+        texture(u_NoiseTex, noiseUVW + vec3(0.0,  0.43, 0.17)).r
+    ) * 2.0 - 1.0;                                  // remap [0,1] -> [-1,1]
+    vec3 warpedPos = pos + warp * edgeMask * u_CurlStrength * u_VoxelSize;
+    float noiseVal = texture(u_NoiseTex, warpedPos / (u_BoundsMax - u_BoundsMin)).r;
+    ```
+    The three texture lookups at staggered offsets approximate a curl-like divergence-free
+    displacement without needing a separate curl noise texture.
+  - **Combine density + noise:**
+    ```glsl
+    // max(euclidean, voxel distance) falloff — the stored voxel value already IS the
+    // euclidean-normalised distance; use max to prevent noise from adding density where
+    // the flood fill has not yet reached (ensures walls still block cleanly):
+    float density = max(rawDensity, 0.0) * mix(1.0, noiseVal, edgeMask * u_NoiseStrength);
+    ```
+  - Expose `u_EdgeFadeWidth` (default 0.3), `u_CurlStrength` (default 1.5), `u_NoiseStrength` (default 0.9)
+  - **Verify:** Smoke boundary looks fluffy/turbulent; interior remains smooth; walls still block
+
+- [ ] **Step 10c — Split Extinction: Scattering (σ_s) + Absorption (σ_a) + Shadow Ray**
+  - Replace single `u_SigmaE` with two uniforms: `u_SigmaS` (scattering) and `u_SigmaA` (absorption)
+    - Extinction: `float sigmaE = u_SigmaS + u_SigmaA;`
+    - Smoke albedo = `u_SigmaS / sigmaE` (high albedo ≈ 0.9 → white/grey smoke; low → dark smoke)
+  - **Shadow ray** — before accumulating scattered light, march a short ray from `pos` toward the light
+    to compute how much light is attenuated before reaching that point:
+    ```glsl
+    float shadowMarch(vec3 pos, vec3 lightDir, int steps, float stepSize) {
+        float opticalDepth = 0.0;
+        for (int i = 0; i < steps; i++) {
+            pos += lightDir * stepSize;
+            if (!insideBounds(pos)) break;
+            opticalDepth += sampleDensityWithNoise(pos) * u_DensityScale;
+        }
+        return exp(-opticalDepth * sigmaE * stepSize);  // Beer-Lambert shadow transmittance
+    }
+    ```
+    - Use 8 shadow steps at `u_VoxelSize * 1.5` step size (cheap but plausible)
+  - **Powder effect** (fake multiple scattering — makes dense interior darker, avoids flat look):
+    ```glsl
+    float powder = 1.0 - exp(-density * sigmaE * u_StepSize * 2.0);
+    float lightMult = 2.0 * powder;   // brightens edges, darkens core
+    ```
+  - **Updated accumulation** (replaces Step 10a placeholder):
+    ```glsl
+    float shadowT = shadowMarch(pos, u_LightDir, 8, u_VoxelSize * 1.5);
+    vec3  Li      = u_LightColor * shadowT * lightMult;   // incoming radiance at sample
+    color        += transmittance * u_SigmaS * density * Li * u_StepSize;
+    transmittance *= exp(-sigmaE * density * u_StepSize);
+    ```
+  - Expose `u_LightDir` (world-space, normalised), `u_LightColor`, `u_SigmaS`, `u_SigmaA`
+  - **Verify:** Lit side of smoke brighter; shadowed interior visibly darker; thicker smoke self-shadows
+
+- [ ] **Step 10d — Phase Function: Henyey-Greenstein vs Rayleigh**
+  - Implement both phase functions in the shader, selected via `uniform int u_PhaseMode` (0 = HG, 1 = Rayleigh):
+    ```glsl
+    const float PI = 3.14159265;
+    float cosTheta = dot(rayDir, u_LightDir);   // angle between view ray and light
+
+    // Henyey-Greenstein (smoke particles, Mie scattering regime)
+    // g in [-1,1]: 0=isotropic, >0=forward, <0=backward. Smoke: g~0.4
+    float phaseHG(float cosT, float g) {
+        float g2 = g * g;
+        return (1.0 / (4.0*PI)) * (1.0 - g2) / pow(1.0 + g2 - 2.0*g*cosT, 1.5);
+    }
+
+    // Rayleigh (molecular/small-particle scattering — blue-sky, fog at large scale)
+    // Symmetric lobe: forward = backward, brighter at 0 deg and 180 deg
+    float phaseRayleigh(float cosT) {
+        return (3.0 / (16.0*PI)) * (1.0 + cosT*cosT);
+    }
+
+    float phase = (u_PhaseMode == 0) ? phaseHG(cosTheta, u_G) : phaseRayleigh(cosTheta);
+    ```
+  - Multiply `phase` into scattered light: `color += transmittance * u_SigmaS * density * Li * phase * u_StepSize;`
+  - Expose `u_G` (default 0.4 for smoke), `u_PhaseMode` (toggle with P key)
+  - **Expected difference:**
+    - HG g=0.4: smoke brighter when camera looks toward the light (forward-scatter lobe)
+    - HG g=0.0: isotropic baseline, good reference
+    - Rayleigh: two symmetric lobes (front+back), no single forward spike, looks more like haze
+    - Smoke is in the Mie regime (particles >> wavelength) so HG is physically correct;
+      Rayleigh is useful for comparison and for haze/atmosphere effects
+  - **Verify:** Toggle P key changes visible glow direction; HG shows strong rim-light when backlit
 
 - [ ] **Step 11 — SDF Bullet Holes**
   - `struct GPUBulletHole { vec4 origin; vec4 forward; float r0, r1, length, elapsed; }`
