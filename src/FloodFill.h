@@ -23,7 +23,7 @@ public:
     bool active = false;
 
     // ---- Ellipsoid shape control ----
-    float radiusXZ = 1.5f;   // horizontal scale
+    float radiusXZ = 1.0f;   // horizontal scale
     float radiusY  = 0.6f;   // vertical scale (smaller = flatter)
 
     void init(int totalVoxels) {
@@ -246,7 +246,15 @@ void main() {
             maxVal = max(maxVal, src[nIdx] - 1);
     }
 
-    dst[idx] = max(maxVal, 0);
+    // Flood fill reachability check (walls block, hop-count gates wavefront)
+    // but store Euclidean-based value for smooth spherical iso-surfaces
+    // instead of the L1 hop-count which produces an octahedral/diamond shape.
+    if (maxVal <= 0) {
+        dst[idx] = 0;
+    } else {
+        float edist = sqrt(ellipsoidDist);   // 0 at seed, 1 at ellipsoid edge
+        dst[idx] = max(int(float(u_MaxSeedVal) * (1.0 - edist)), 1);
+    }
 }
 )";
     }
