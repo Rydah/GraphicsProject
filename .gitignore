@@ -4,7 +4,9 @@
 *.vcxproj.filters
 x64/
 Debug/
+build/
 Release/
+.vscode/
 *.obj
 *.pdb
 *.ilk

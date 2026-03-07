@@ -3,8 +3,8 @@
 
 #include <glad/glad.h>
 #include <glm/glm.hpp>
-#include "shader.h"
-#include "Buffer.h"
+#include "core/shader.h"
+#include "core/Buffer.h"
 
 class VoxelDebug {
 public:

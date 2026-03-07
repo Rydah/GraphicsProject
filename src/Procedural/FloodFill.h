@@ -4,9 +4,10 @@
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <iostream>
+#include <cmath>
 
-#include "ComputeShader.h"
-#include "Buffer.h"
+#include "core/ComputeShader.h"
+#include "core/Buffer.h"
 
 class VoxelFloodFill {
 public:
@@ -245,16 +246,13 @@ void main() {
         if (walls[nIdx] == 0)
             maxVal = max(maxVal, src[nIdx] - 1);
     }
-
-    // Flood fill reachability check (walls block, hop-count gates wavefront)
-    // but store Euclidean-based value for smooth spherical iso-surfaces
-    // instead of the L1 hop-count which produces an octahedral/diamond shape.
+    
     if (maxVal <= 0) {
         dst[idx] = 0;
     } else {
-        float edist = sqrt(ellipsoidDist);   // 0 at seed, 1 at ellipsoid edge
-        dst[idx] = max(int(float(u_MaxSeedVal) * (1.0 - edist)), 1);
+        dst[idx] = max(maxVal, 0);
     }
+    
 }
 )";
     }

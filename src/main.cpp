@@ -10,21 +10,21 @@
 #include <iostream>
 
 // --- Project headers ---
-#include "GLDebug.h"          // enableGLDebug(), printGPUInfo()
-#include "OrbitCamera.h"      // OrbitCamera struct
-#include "SelfTests.h"        // SelfTests::runAllTests()
-#include "NoiseDebugView.h"   // NoiseDebugView (Worley slice visualizer)
+#include "Debugtest/GLDebug.h"          // enableGLDebug(), printGPUInfo()
+#include "camera/OrbitCamera.h"      // OrbitCamera struct
+#include "Debugtest/SelfTests.h"        // SelfTests::runAllTests()
+#include "Debugtest/NoiseDebugView.h"   // NoiseDebugView (Worley slice visualizer)
 
-#include "ComputeShader.h"
-#include "Buffer.h"
-#include "Texture3D.h"
-#include "Texture2D.h"
-#include "Framebuffer.h"
-#include "WorleyNoise.h"
-#include "FullscreenQuad.h"
-#include "Voxelizer.h"
-#include "VoxelDebug.h"
-#include "FloodFill.h"
+#include "core/ComputeShader.h"
+#include "core/Buffer.h"
+#include "core/Texture3D.h"
+#include "core/Texture2D.h"
+#include "core/Framebuffer.h"
+#include "Procedural/WorleyNoise.h"
+#include "core/FullscreenQuad.h"
+#include "Voxel/Voxelizer.h"
+#include "Voxel/VoxelDebug.h"
+#include "Procedural/FloodFill.h"
 
 //---------------------------------------------------------------------
 // Window
@@ -67,12 +67,12 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
         if (g_floodFill && g_voxelizer) {
             glm::vec3 seedPos = glm::vec3(
-                g_voxelizer->boundsMin.x + g_voxelizer->voxelSize * 5.0f,
-                g_voxelizer->boundsMin.y + g_voxelizer->voxelSize * 2.0f,
-                g_voxelizer->boundsMin.z + g_voxelizer->voxelSize * 5.0f
+                g_voxelizer->domain.boundsMin.x + g_voxelizer->domain.voxelSize * 5.0f,
+                g_voxelizer->domain.boundsMin.y + g_voxelizer->domain.voxelSize * 2.0f,
+                g_voxelizer->domain.boundsMin.z + g_voxelizer->domain.voxelSize * 5.0f
             );
-            g_floodFill->seed(seedPos, g_voxelizer->gridSize,
-                              g_voxelizer->boundsMin, g_voxelizer->voxelSize);
+            g_floodFill->seed(seedPos, g_voxelizer->domain.gridSize,
+                              g_voxelizer->domain.boundsMin, g_voxelizer->domain.voxelSize);
         }
     }
 }
@@ -146,7 +146,7 @@ int main()
 
     // --- Flood fill ---
     VoxelFloodFill floodFill;
-    floodFill.init(voxelizer.totalVoxels);
+    floodFill.init(voxelizer.domain.totalVoxels);
 
     g_voxelizer = &voxelizer;
     g_floodFill = &floodFill;
@@ -168,8 +168,8 @@ int main()
 
         // GPU simulation
         worleyNoise.generate(time);
-        floodFill.propagate(4, voxelizer.gridSize, voxelizer.boundsMin,
-                            voxelizer.voxelSize, voxelizer.staticVoxels, dt);
+        floodFill.propagate(4, voxelizer.domain.gridSize, voxelizer.domain.boundsMin,
+                            voxelizer.domain.voxelSize, voxelizer.staticVoxels, dt);
 
         if (g_noiseView.enabled) {
             g_noiseView.draw(worleyNoise.texture, fsQuad);
@@ -180,8 +180,8 @@ int main()
 
             voxelDebug.drawWithSmoke(voxelizer.staticVoxels, floodFill.currentBuffer(),
                                      view, proj,
-                                     voxelizer.gridSize, voxelizer.boundsMin,
-                                     voxelizer.voxelSize);
+                                     voxelizer.domain.gridSize, voxelizer.domain.boundsMin,
+                                     voxelizer.domain.voxelSize);
         }
 
         glfwSwapBuffers(window);
