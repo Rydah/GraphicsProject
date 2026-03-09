@@ -6,6 +6,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <string>
+#include "core/FileUtils.h"
 
 class ComputeShader {
 public:
@@ -39,6 +40,12 @@ public:
         if (success) {
             glGetProgramiv(ID, GL_COMPUTE_WORK_GROUP_SIZE, localSize);
         }
+    }
+
+    void setUpFromFile(const std::string& path) {
+        std::string src = loadTextFile(path);
+        std::cout << "[ComputeShader] Compiling " << path << std::endl;
+        setUp(src.c_str());
     }
 
     void use() const {

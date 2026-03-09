@@ -10,21 +10,27 @@
 #include <iostream>
 
 // --- Project headers ---
-#include "Debugtest/GLDebug.h"          // enableGLDebug(), printGPUInfo()
-#include "camera/OrbitCamera.h"      // OrbitCamera struct
-#include "Debugtest/SelfTests.h"        // SelfTests::runAllTests()
-#include "Debugtest/NoiseDebugView.h"   // NoiseDebugView (Worley slice visualizer)
+#include "Debugtest/GLDebug.h"            // enableGLDebug(), printGPUInfo()
+#include "camera/OrbitCamera.h"           // OrbitCamera struct
+#include "Debugtest/SelfTests.h"          // SelfTests::runAllTests()
+#include "Debugtest/NoiseDebugView.h"     // NoiseDebugView (Worley slice visualizer)
+#include "Debugtest/VelocityDebugView.h"
 
 #include "core/ComputeShader.h"
 #include "core/Buffer.h"
 #include "core/Texture3D.h"
 #include "core/Texture2D.h"
 #include "core/Framebuffer.h"
-#include "Procedural/WorleyNoise.h"
 #include "core/FullscreenQuad.h"
+#include "core/SmokeField.h"
+
+#include "Procedural/WorleyNoise.h"
+#include "Procedural/FloodFill.h"
+
 #include "Voxel/Voxelizer.h"
 #include "Voxel/VoxelDebug.h"
-#include "Procedural/FloodFill.h"
+
+#include "SmokeSolver/SmokeSolver.h"
 
 //---------------------------------------------------------------------
 // Window
@@ -35,10 +41,11 @@ static unsigned int winHeight = 600;
 //---------------------------------------------------------------------
 // Scene-level globals (need to be accessible from GLFW callbacks)
 //---------------------------------------------------------------------
-static OrbitCamera    g_camera;
-static Voxelizer*     g_voxelizer = nullptr;
-static VoxelFloodFill* g_floodFill = nullptr;
-static NoiseDebugView g_noiseView;
+static OrbitCamera      g_camera;
+static Voxelizer*       g_voxelizer   = nullptr;
+static VoxelFloodFill*  g_floodFill   = nullptr;
+static NoiseDebugView   g_noiseView;
+static VelocityDebugView g_velocityDebug;
 
 //---------------------------------------------------------------------
 // GLFW callbacks
@@ -53,15 +60,38 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 
-    // Noise debug toggle and slice controls
+    // Noise debug toggle
     if (key == GLFW_KEY_N && action == GLFW_PRESS) {
         g_noiseView.enabled = !g_noiseView.enabled;
+
+        // Keep debug views mutually exclusive
+        if (g_noiseView.enabled) {
+            g_velocityDebug.enabled = false;
+        }
+
         std::cout << "Noise debug: " << (g_noiseView.enabled ? "ON" : "OFF") << "\n";
     }
-    if (key == GLFW_KEY_UP   && (action == GLFW_PRESS || action == GLFW_REPEAT))
-        g_noiseView.sliceZ = glm::min(g_noiseView.sliceZ + 0.02f, 1.0f);
-    if (key == GLFW_KEY_DOWN && (action == GLFW_PRESS || action == GLFW_REPEAT))
-        g_noiseView.sliceZ = glm::max(g_noiseView.sliceZ - 0.02f, 0.0f);
+
+    // Velocity debug toggle
+    if (key == GLFW_KEY_V && action == GLFW_PRESS) {
+        g_velocityDebug.enabled = !g_velocityDebug.enabled;
+
+        // Keep debug views mutually exclusive
+        if (g_velocityDebug.enabled) {
+            g_noiseView.enabled = false;
+        }
+
+        std::cout << "Velocity debug: " << (g_velocityDebug.enabled ? "ON" : "OFF") << "\n";
+    }
+
+    // Noise slice controls only when noise debug is active
+    if (g_noiseView.enabled) {
+        if (key == GLFW_KEY_UP && (action == GLFW_PRESS || action == GLFW_REPEAT))
+            g_noiseView.sliceZ = glm::min(g_noiseView.sliceZ + 0.02f, 1.0f);
+
+        if (key == GLFW_KEY_DOWN && (action == GLFW_PRESS || action == GLFW_REPEAT))
+            g_noiseView.sliceZ = glm::max(g_noiseView.sliceZ - 0.02f, 0.0f);
+    }
 
     // Space: detonate smoke grenade in arena corner
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
@@ -71,8 +101,10 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
                 g_voxelizer->domain.boundsMin.y + g_voxelizer->domain.voxelSize * 2.0f,
                 g_voxelizer->domain.boundsMin.z + g_voxelizer->domain.voxelSize * 5.0f
             );
-            g_floodFill->seed(seedPos, g_voxelizer->domain.gridSize,
-                              g_voxelizer->domain.boundsMin, g_voxelizer->domain.voxelSize);
+            g_floodFill->seed(seedPos,
+                              g_voxelizer->domain.gridSize,
+                              g_voxelizer->domain.boundsMin,
+                              g_voxelizer->domain.voxelSize);
         }
     }
 }
@@ -107,6 +139,7 @@ int main()
         glfwTerminate();
         return -1;
     }
+
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetKeyCallback(window, key_callback);
@@ -136,6 +169,7 @@ int main()
     fsQuad.init();
 
     g_noiseView.init();
+    g_velocityDebug.init();
 
     // --- Voxel scene (procedural test arena) ---
     Voxelizer voxelizer;
@@ -150,6 +184,34 @@ int main()
 
     g_voxelizer = &voxelizer;
     g_floodFill = &floodFill;
+
+    // --- Smoke solver state ---
+    SmokeField smoke;
+    smoke.init(voxelizer.domain);
+
+    std::vector<glm::vec4> initVel(voxelizer.domain.totalVoxels, glm::vec4(0.0f));
+
+    for (int z = 0; z < voxelizer.domain.gridSize.z; ++z) {
+        for (int y = 0; y < voxelizer.domain.gridSize.y; ++y) {
+            for (int x = 0; x < voxelizer.domain.gridSize.x; ++x) {
+                glm::ivec3 c(x, y, z);
+                int idx = voxelizer.domain.flatten(c);
+
+                // small test region near one corner
+                if (x >= 4 && x <= 8 &&
+                    y >= 1 && y <= 4 &&
+                    z >= 4 && z <= 8) {
+                    initVel[idx] = glm::vec4(0.0f, -2.0f, 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
+    smoke.velocity1.upload(initVel);
+    smoke.velocity2.upload(initVel);
+
+    SmokeSolver solver;
+    solver.init();
 
     // --- Timing ---
     float lastFrameTime = 0.0f;
@@ -166,22 +228,46 @@ int main()
         glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // GPU simulation
+        // --- GPU simulation ---
         worleyNoise.generate(time);
-        floodFill.propagate(4, voxelizer.domain.gridSize, voxelizer.domain.boundsMin,
-                            voxelizer.domain.voxelSize, voxelizer.staticVoxels, dt);
 
+        floodFill.propagate(4,
+                            voxelizer.domain.gridSize,
+                            voxelizer.domain.boundsMin,
+                            voxelizer.domain.voxelSize,
+                            voxelizer.staticVoxels,
+                            dt);
+
+        solver.step(smoke, voxelizer.staticVoxels, dt);
+
+        // --- Camera matrices ---
+        float aspect = (float)winWidth / (float)winHeight;
+        glm::mat4 view = g_camera.view();
+        glm::mat4 proj = g_camera.proj(aspect);
+
+        // --- Debug / render modes ---
         if (g_noiseView.enabled) {
             g_noiseView.draw(worleyNoise.texture, fsQuad);
-        } else {
-            float aspect = (float)winWidth / (float)winHeight;
-            glm::mat4 view = g_camera.view();
-            glm::mat4 proj = g_camera.proj(aspect);
-
-            voxelDebug.drawWithSmoke(voxelizer.staticVoxels, floodFill.currentBuffer(),
-                                     view, proj,
-                                     voxelizer.domain.gridSize, voxelizer.domain.boundsMin,
-                                     voxelizer.domain.voxelSize);
+        }
+        else if (g_velocityDebug.enabled) {
+            g_velocityDebug.draw(
+                smoke.domain,
+                smoke.getSrcVelocity(),
+                voxelizer.staticVoxels,
+                view,
+                proj
+            );
+        }
+        else {
+            voxelDebug.drawWithSmoke(
+                voxelizer.staticVoxels,
+                floodFill.currentBuffer(),
+                view,
+                proj,
+                voxelizer.domain.gridSize,
+                voxelizer.domain.boundsMin,
+                voxelizer.domain.voxelSize
+            );
         }
 
         glfwSwapBuffers(window);
@@ -191,12 +277,16 @@ int main()
     g_voxelizer = nullptr;
     g_floodFill = nullptr;
 
+    solver.destroy();
+    smoke.destroy();
+
     floodFill.destroy();
     voxelizer.destroy();
     voxelDebug.destroy();
     worleyNoise.destroy();
     fsQuad.destroy();
     g_noiseView.destroy();
+    g_velocityDebug.destroy();
 
     glfwTerminate();
     return 0;
