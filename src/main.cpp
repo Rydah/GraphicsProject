@@ -201,7 +201,7 @@ int main()
                 if (x >= 4 && x <= 8 &&
                     y >= 1 && y <= 4 &&
                     z >= 4 && z <= 8) {
-                    initVel[idx] = glm::vec4(0.0f, -2.0f, 0.0f, 0.0f);
+                    initVel[idx] = glm::vec4(1.0f, -2.0f, 1.0f, 0.0f);
                 }
             }
         }

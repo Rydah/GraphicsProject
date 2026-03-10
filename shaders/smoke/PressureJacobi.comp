@@ -85,6 +85,12 @@ void main() {
     float div = divergence[idx];
     float h2 = u_CellSize * u_CellSize;
 
-    pressureDest[idx] = (pL + pR + pD + pU + pB + pF - div * h2) / count;
+    // temp var we can inject this in from cpu side
+    float weightSOR = 1;
+
+    float pOld = pressureSrc[idx];
+    float pNew = (pL + pR + pD + pU + pB + pF - div * h2) / count;
+
+    pressureDest[idx] = pOld + (pNew - pOld)*weightSOR;
 }
 
