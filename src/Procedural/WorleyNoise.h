@@ -1,8 +1,8 @@
 #ifndef WORLEY_NOISE_H
 #define WORLEY_NOISE_H
 
-#include "ComputeShader.h"
-#include "Texture3D.h"
+#include "core/ComputeShader.h"
+#include "core/Texture3D.h"
 #include "glVersion.h"
 
 class WorleyNoise {

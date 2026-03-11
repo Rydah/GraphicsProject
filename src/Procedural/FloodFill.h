@@ -4,9 +4,10 @@
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <iostream>
+#include <cmath>
 
-#include "ComputeShader.h"
-#include "Buffer.h"
+#include "core/ComputeShader.h"
+#include "core/Buffer.h"
 
 #include "glVersion.h"
 
@@ -27,7 +28,7 @@ public:
     bool active = false;
 
     // ---- Ellipsoid shape control ----
-    float radiusXZ = 1.5f;   // horizontal scale
+    float radiusXZ = 1.0f;   // horizontal scale
     float radiusY  = 0.6f;   // vertical scale (smaller = flatter)
 
     void init(int totalVoxels) {
@@ -135,10 +136,10 @@ private:
     ComputeShader fillCS;
 
     float easeIn(float x) {
-        if (x < 0.5f)
-            return 2.0f * x * x;
-        else
-            return 1.0f - 1.0f / (5.0f * (2.0f * x - 0.8f) + 1.0f);
+        // x^0.25: explosive start (near-vertical slope at t=0),
+        // decelerates aggressively, then crawls through the last ~5-10%.
+        // t=0.01 -> 56%, t=0.50 -> 84%, t=0.90 -> 97%, t=0.95 -> 99%
+        return powf(x, 0.25f);
     }
 
     const char* getSeedSource() {
@@ -248,8 +249,13 @@ void main() {
         if (walls[nIdx] == 0)
             maxVal = max(maxVal, src[nIdx] - 1);
     }
-
-    dst[idx] = max(maxVal, 0);
+    
+    if (maxVal <= 0) {
+        dst[idx] = 0;
+    } else {
+        dst[idx] = max(maxVal, 0);
+    }
+    
 }
 )";
 return src.c_str();

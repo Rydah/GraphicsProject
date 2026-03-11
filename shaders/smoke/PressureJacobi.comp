@@ -1,0 +1,96 @@
+#version 430 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(std430, binding = 0) readonly buffer PressureSrc {float pressureSrc[];};
+layout(std430, binding = 1) readonly buffer Walls {int walls[];};
+layout(std430, binding = 2) readonly buffer Divergence {float divergence[];};
+layout(std430, binding = 3) writeonly buffer PressureDest {float pressureDest[];};
+
+uniform ivec3 u_GridSize;
+uniform float u_CellSize;
+
+int flatIdx(ivec3 c) {
+    return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
+}
+
+bool inBounds(ivec3 c) {
+    return c.x >= 0 && c.y >= 0 && c.z >= 0 &&
+           c.x < u_GridSize.x &&
+           c.y < u_GridSize.y &&
+           c.z < u_GridSize.z;
+}
+
+// Returns true if the coordinate is valid and not a wall
+bool isFluidCell(ivec3 c) {
+    if (!inBounds(c)) {
+        return false;
+    }
+
+    int idx = flatIdx(c);
+    return walls[idx] == 0;
+}
+
+// Sample pressure from a neighbor, returning 0.0 for invalid/solid cells
+float samplePressureOrZero(ivec3 c) {
+    if (!isFluidCell(c)) {
+        return 0.0;
+    }
+
+    return pressureSrc[flatIdx(c)];
+}
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID);
+
+    if (!inBounds(coord)) {
+        return;
+    }
+
+    int idx = flatIdx(coord);
+
+    // Pressure inside solid cells is treated as zero for now
+    if (walls[idx] != 0) {
+        pressureDest[idx] = 0.0;
+        return;
+    }
+
+    ivec3 left  = coord + ivec3(-1,  0,  0);
+    ivec3 right = coord + ivec3( 1,  0,  0);
+    ivec3 down  = coord + ivec3( 0, -1,  0);
+    ivec3 up    = coord + ivec3( 0,  1,  0);
+    ivec3 back  = coord + ivec3( 0,  0, -1);
+    ivec3 front = coord + ivec3( 0,  0,  1);
+
+    float pL = samplePressureOrZero(left);
+    float pR = samplePressureOrZero(right);
+    float pD = samplePressureOrZero(down);
+    float pU = samplePressureOrZero(up);
+    float pB = samplePressureOrZero(back);
+    float pF = samplePressureOrZero(front);
+
+    float count = 0.0;
+    if (isFluidCell(left))  count += 1.0;
+    if (isFluidCell(right)) count += 1.0;
+    if (isFluidCell(down))  count += 1.0;
+    if (isFluidCell(up))    count += 1.0;
+    if (isFluidCell(back))  count += 1.0;
+    if (isFluidCell(front)) count += 1.0;
+
+    if (count == 0.0) {
+        pressureDest[idx] = pressureSrc[idx];
+        return;
+    }
+
+    float div = divergence[idx];
+    float h2 = u_CellSize * u_CellSize;
+
+    // temp var we can inject this in from cpu side
+    float weightSOR = 1;
+
+    float pOld = pressureSrc[idx];
+    float pNew = (pL + pR + pD + pU + pB + pF - div * h2) / count;
+
+    pressureDest[idx] = pOld + (pNew - pOld)*weightSOR;
+}
+
