@@ -15,6 +15,7 @@
 #include "Debugtest/SelfTests.h"          // SelfTests::runAllTests()
 #include "Debugtest/NoiseDebugView.h"     // NoiseDebugView (Worley slice visualizer)
 #include "Debugtest/VelocityDebugView.h"
+#include "Debugtest/DepthDebugView.h"      // DepthDebugView (linearized depth visualizer)
 
 #include "core/ComputeShader.h"
 #include "core/Buffer.h"
@@ -22,7 +23,7 @@
 #include "core/Texture2D.h"
 #include "core/Framebuffer.h"
 #include "core/FullscreenQuad.h"
-#include "core/SmokeField.h"
+#include "core/smokeField.h"
 
 #include "Procedural/WorleyNoise.h"
 #include "Procedural/FloodFill.h"
@@ -31,6 +32,7 @@
 #include "Voxel/VoxelDebug.h"
 
 #include "SmokeSolver/SmokeSolver.h"
+#include "core/SceneDepthPass.h"
 
 //---------------------------------------------------------------------
 // Window
@@ -44,8 +46,10 @@ static unsigned int winHeight = 600;
 static OrbitCamera      g_camera;
 static Voxelizer*       g_voxelizer   = nullptr;
 static VoxelFloodFill*  g_floodFill   = nullptr;
-static NoiseDebugView   g_noiseView;
+static NoiseDebugView    g_noiseView;
 static VelocityDebugView g_velocityDebug;
+static DepthDebugView    g_depthDebug;
+static SceneDepthPass*   g_depthPass = nullptr;
 
 //---------------------------------------------------------------------
 // GLFW callbacks
@@ -67,6 +71,7 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
         // Keep debug views mutually exclusive
         if (g_noiseView.enabled) {
             g_velocityDebug.enabled = false;
+            g_depthDebug.enabled    = false;
         }
 
         std::cout << "Noise debug: " << (g_noiseView.enabled ? "ON" : "OFF") << "\n";
@@ -78,7 +83,8 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
 
         // Keep debug views mutually exclusive
         if (g_velocityDebug.enabled) {
-            g_noiseView.enabled = false;
+            g_noiseView.enabled  = false;
+            g_depthDebug.enabled = false;
         }
 
         std::cout << "Velocity debug: " << (g_velocityDebug.enabled ? "ON" : "OFF") << "\n";
@@ -93,12 +99,20 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
             g_noiseView.sliceZ = glm::max(g_noiseView.sliceZ - 0.02f, 0.0f);
     }
 
-    // Space: detonate smoke grenade in arena corner
-    if (key == GLFW_KEY_D && action == GLFW_PRESS) 
-    {
-    showDepthDebug = !showDepthDebug;
-    std::cout << "Depth debug: " << (showDepthDebug ? "ON" : "OFF") << std::endl;
+    // Depth debug toggle
+    if (key == GLFW_KEY_D && action == GLFW_PRESS) {
+        g_depthDebug.enabled = !g_depthDebug.enabled;
+
+        // Keep debug views mutually exclusive
+        if (g_depthDebug.enabled) {
+            g_noiseView.enabled     = false;
+            g_velocityDebug.enabled = false;
+        }
+
+        std::cout << "Depth debug: " << (g_depthDebug.enabled ? "ON" : "OFF") << "\n";
     }
+
+    // Space: detonate smoke grenade in arena corner
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
         if (g_floodFill && g_voxelizer) {
             glm::vec3 seedPos = glm::vec3(
@@ -183,6 +197,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
     g_noiseView.init();
     g_velocityDebug.init();
+    g_depthDebug.init();
 
     // --- Voxel scene (procedural test arena) ---
     Voxelizer voxelizer;
@@ -194,6 +209,11 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     // --- Flood fill ---
     VoxelFloodFill floodFill;
     floodFill.init(voxelizer.domain.totalVoxels);
+
+    // --- Scene depth pass ---
+    SceneDepthPass depthPass;
+    depthPass.init(winWidth, winHeight);
+    g_depthPass = &depthPass;
 
     g_voxelizer = &voxelizer;
     g_floodFill = &floodFill;
@@ -236,28 +256,24 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         float dt   = time - lastFrameTime;
         lastFrameTime = time;
 
-        // Render scene depth
-        depthFBO.bind();
-        glClear(GL_DEPTH_BUFFER_BIT);
-        glEnable(GL_DEPTH_TEST);
-
-        glm::vec3 camPos = getCameraPosition();
-        projection = glm::perspective(glm::radians(camera_fovy),
-            (float)winWidth / (float)winHeight, _Z_NEAR, _Z_FAR);
-        glm::mat4 view = glm::lookAt(camPos, camera_target, camera_up);
-        glm::mat4 MVP = projection * view; // no model transform for now
-
-        depthShader.use();
-        depthShader.setMat4("u_MVP", MVP);
-        glBindVertexArray(roomVAO);
-        glDrawElements(GL_TRIANGLES, 18, GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
-        Framebuffer::unbind();
-
         glfwPollEvents();
 
         glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Resize depth pass if window changed
+        depthPass.resize(winWidth, winHeight);
+
+        // --- Camera matrices ---
+        float aspect = (float)winWidth / (float)winHeight;
+        glm::mat4 view = g_camera.view();
+        glm::mat4 proj = g_camera.proj(aspect);
+
+        // Render scene depth into FBO
+        depthPass.execute(voxelizer.staticVoxels, voxelizer.domain, view, proj);
+
+        // Restore default viewport after depth pass
+        glViewport(0, 0, winWidth, winHeight);
 
         // --- GPU simulation ---
         worleyNoise.generate(time);
@@ -271,36 +287,13 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
         solver.step(smoke, voxelizer.staticVoxels, dt);
 
-        // --- Camera matrices ---
-        float aspect = (float)winWidth / (float)winHeight;
-        glm::mat4 view = g_camera.view();
-        glm::mat4 proj = g_camera.proj(aspect);
-
         // --- Debug / render modes ---
         if (g_noiseView.enabled) {
             g_noiseView.draw(worleyNoise.texture, fsQuad);
         }
-        else if (showDepthDebug)
-        {
-            glDisable(GL_DEPTH_TEST);
-            depthDebugShader.use();
-            depthDebugShader.setInt("u_DepthTex", 0);
-            depthDebugShader.setFloat("u_Near", _Z_NEAR);
-            depthDebugShader.setFloat("u_Far", _Z_FAR);
-            depthTex.bindSampler(0);
-            fsQuad.draw();
-            glEnable(GL_DEPTH_TEST);
+        else if (g_depthDebug.enabled) {
+            g_depthDebug.draw(depthPass.depthTex, fsQuad);
         }
-        TODO: Refactor into debug file
-        // else if (g_velocityDebug.enabled) {
-        //     g_velocityDebug.draw(
-        //         smoke.domain,
-        //         smoke.getSrcVelocity(),
-        //         voxelizer.staticVoxels,
-        //         view,
-        //         proj
-        //     );
-        // }
         else {
             voxelDebug.drawWithSmoke(
                 voxelizer.staticVoxels,
@@ -317,9 +310,11 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     }
 
     // --- Cleanup ---
-    g_voxelizer = nullptr;
-    g_floodFill = nullptr;
+    g_voxelizer  = nullptr;
+    g_floodFill  = nullptr;
+    g_depthPass  = nullptr;
 
+    depthPass.destroy();
     solver.destroy();
     smoke.destroy();
 
@@ -330,15 +325,8 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     fsQuad.destroy();
     g_noiseView.destroy();
     g_velocityDebug.destroy();
+    g_depthDebug.destroy();
 
     glfwTerminate();
-    TODO: refactor into cleanup function and move debug cleanup there
-    // depthTex.destroy();
-    // depthFBO.destroy();
-    // glDeleteVertexArrays(1, &roomVAO);
-    // glDeleteBuffers(1, &roomVBO);
-    // glDeleteBuffers(1, &roomEBO);
-    // glDeleteProgram(depthShader.ID);
-    // glDeleteProgram(depthDebugShader.ID);
     return 0;
 }

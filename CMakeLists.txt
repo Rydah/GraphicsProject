@@ -10,6 +10,12 @@ find_package(OpenGL REQUIRED)
 add_executable(GraphicsProject
     src/main.cpp
     src/glad.c
+    src/core/smokeField.cpp
+    src/SmokeSolver/SmokeSolver.cpp
+    src/SmokeSolver/AdvectVelocity.cpp
+    src/SmokeSolver/ComputeDivergence.cpp
+    src/SmokeSolver/PressureJacobi.cpp
+    src/SmokeSolver/ProjectVelocity.cpp
 )
 
 target_include_directories(GraphicsProject PRIVATE
