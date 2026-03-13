@@ -8,6 +8,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
+#include <vector>
 
 // --- Project headers ---
 #include "Debugtest/GLDebug.h"            // enableGLDebug(), printGPUInfo()
@@ -52,6 +53,28 @@ static VelocityDebugView g_velocityDebug;
 static DepthDebugView    g_depthDebug;
 static SceneDepthPass*   g_depthPass = nullptr;
 static bool              g_raymarchEnabled = true;
+static std::vector<int>  g_wallVoxelCache;
+
+// Ray-AABB slab intersection. Returns true on hit with [tEnter, tExit].
+static bool rayIntersectsAABB(const glm::vec3& rayOrigin,
+                              const glm::vec3& rayDir,
+                              const glm::vec3& bmin,
+                              const glm::vec3& bmax,
+                              float& tEnter,
+                              float& tExit)
+{
+    glm::vec3 invDir = 1.0f / rayDir;
+    glm::vec3 t1 = (bmin - rayOrigin) * invDir;
+    glm::vec3 t2 = (bmax - rayOrigin) * invDir;
+
+    glm::vec3 tMin = glm::min(t1, t2);
+    glm::vec3 tMax = glm::max(t1, t2);
+
+    tEnter = glm::max(glm::max(tMin.x, tMin.y), tMin.z);
+    tExit  = glm::min(glm::min(tMax.x, tMax.y), tMax.z);
+
+    return (tExit >= tEnter) && (tExit >= 0.0f);
+}
 
 //---------------------------------------------------------------------
 // GLFW callbacks
@@ -128,24 +151,65 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
         std::cout << "Depth debug: " << (g_depthDebug.enabled ? "ON" : "OFF") << "\n";
     }
 
-    // Space: detonate smoke grenade in arena corner
-    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
-        if (g_floodFill && g_voxelizer) {
-            glm::vec3 seedPos = glm::vec3(
-                g_voxelizer->domain.boundsMin.x + g_voxelizer->domain.voxelSize * 5.0f,
-                g_voxelizer->domain.boundsMin.y + g_voxelizer->domain.voxelSize * 2.0f,
-                g_voxelizer->domain.boundsMin.z + g_voxelizer->domain.voxelSize * 5.0f
-            );
-            g_floodFill->seed(seedPos,
-                              g_voxelizer->domain.gridSize,
-                              g_voxelizer->domain.boundsMin,
-                              g_voxelizer->domain.voxelSize);
-        }
-    }
 }
 
-static void mouse_button_callback(GLFWwindow*, int button, int action, int) {
+static void mouse_button_callback(GLFWwindow* window, int button, int action, int) {
     g_camera.onMouseButton(button, action);
+
+    // Right click: seed smoke at clicked point in the voxel domain.
+    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+        if (!g_voxelizer || !g_floodFill) return;
+
+        double mouseX = 0.0, mouseY = 0.0;
+        glfwGetCursorPos(window, &mouseX, &mouseY);
+
+        float aspect = (float)winWidth / (float)winHeight;
+        glm::mat4 view = g_camera.view();
+        glm::mat4 proj = g_camera.proj(aspect);
+        glm::mat4 invView = glm::inverse(view);
+        glm::mat4 invProj = glm::inverse(proj);
+
+        float ndcX = (2.0f * (float)mouseX / (float)winWidth) - 1.0f;
+        float ndcY = 1.0f - (2.0f * (float)mouseY / (float)winHeight);
+
+        glm::vec4 vDir = invProj * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+        vDir.w = 0.0f;
+
+        glm::vec3 rayDir    = glm::normalize(glm::vec3(invView * vDir));
+        glm::vec3 rayOrigin = glm::vec3(invView[3]);
+
+        const VoxelDomain& domain = g_voxelizer->domain;
+
+        float tEnter = 0.0f, tExit = 0.0f;
+        if (!rayIntersectsAABB(rayOrigin, rayDir, domain.boundsMin, domain.boundsMax, tEnter, tExit)) {
+            return;
+        }
+
+        float t = glm::max(tEnter, 0.0f);
+        float step = glm::max(domain.voxelSize * 0.5f, 1e-4f);
+        int maxSteps = glm::clamp((int)glm::ceil((tExit - t) / step) + 2, 1, 4096);
+
+        bool seeded = false;
+        for (int i = 0; i < maxSteps; ++i) {
+            glm::vec3 worldPos = rayOrigin + rayDir * t;
+            glm::ivec3 c = domain.worldToGrid(worldPos);
+            int idx = domain.flatten(c);
+
+            if (idx >= 0 && idx < (int)g_wallVoxelCache.size() && g_wallVoxelCache[idx] == 0) {
+                glm::vec3 seedPos = domain.gridToWorldCenter(glm::vec3(c));
+                g_floodFill->seed(seedPos, domain.gridSize, domain.boundsMin, domain.voxelSize);
+                seeded = true;
+                break;
+            }
+
+            t += step;
+            if (t > tExit) break;
+        }
+
+        if (!seeded) {
+            std::cout << "Click hit no valid air voxel for smoke seed.\n";
+        }
+    }
 }
 
 static void cursor_pos_callback(GLFWwindow* window, double x, double y) {
@@ -218,6 +282,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     // --- Voxel scene (procedural test arena) ---
     Voxelizer voxelizer;
     voxelizer.generateTestScene(0.15f, 64);
+    g_wallVoxelCache = voxelizer.staticVoxels.download<int>(voxelizer.domain.totalVoxels);
 
     VoxelDebug voxelDebug;
     voxelDebug.init();
@@ -314,10 +379,12 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
                 floodFill.currentBuffer(),
                 voxelizer.staticVoxels,
                 depthPass.depthTex,
+                worleyNoise.texture,
                 voxelizer.domain,
                 view, proj,
                 0.001f, 100.0f,      // zNear, zFar (match OrbitCamera defaults)
-                floodFill.maxSeedValue
+                floodFill.maxSeedValue,
+                time
             );
         }
 

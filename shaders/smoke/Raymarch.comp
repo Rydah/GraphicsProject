@@ -16,6 +16,7 @@ layout(binding = 0, rgba16f) writeonly uniform image2D u_Output;
 
 // Scene depth from depth-only FBO (full-res, but we sample it)
 uniform sampler2D u_DepthTex;
+uniform sampler3D u_NoiseTex;
 
 // Smoke density SSBO (int per voxel, 0 = empty, up to u_MaxDensityVal)
 layout(std430, binding = 0) readonly buffer SmokeBuf { int smokeDensity[]; };
@@ -41,6 +42,12 @@ uniform float u_DensityScale;      // overall density multiplier  (default ~2.0)
 uniform float u_SigmaE;            // extinction coefficient      (default ~1.0)
 uniform vec3  u_LightDir;          // normalised world-space light direction
 uniform vec3  u_LightColor;        // light colour (default white)
+uniform float u_Time;
+
+// Step 10b: boundary turbulence controls
+uniform float u_EdgeFadeWidth;     // default ~0.3
+uniform float u_CurlStrength;      // default ~1.5
+uniform float u_NoiseStrength;     // default ~0.9
 
 // Texture output size (half-res dimensions)
 uniform ivec2 u_TexSize;
@@ -85,6 +92,12 @@ float sampleSmoke(vec3 worldPos) {
     );
 
     return val / float(max(u_MaxDensityVal, 1));
+}
+
+// World position to normalized volume UVW (0..1 inside domain)
+vec3 worldToVolumeUVW(vec3 worldPos) {
+    vec3 extent = max(u_BoundsMax - u_BoundsMin, vec3(1e-5));
+    return (worldPos - u_BoundsMin) / extent;
 }
 
 // Linearize depth from [0,1] depth buffer value to view-space distance
@@ -136,7 +149,7 @@ void main() {
     float rawDepth  = texture(u_DepthTex, depthUV).r;
     float sceneZ    = linearizeDepth(rawDepth);
     // Convert linear depth to ray t: approximate using dot product with forward
-    vec3 camForward = -normalize(vec3(u_InvView[0][2], u_InvView[1][2], u_InvView[2][2]));
+    vec3 camForward = -normalize(u_InvView[2].xyz);
     float cosAngle  = max(dot(rayDir, camForward), 0.001);
     float maxT      = sceneZ / cosAngle;
 
@@ -155,8 +168,12 @@ void main() {
     float fineStep   = u_VoxelSize * 0.5;
     float t = tHit.x;
     bool foundSmoke = false;
+    float segmentLen = max(tHit.y - tHit.x, 0.0);
 
-    for (int i = 0; i < 96; i++) {
+    // Adaptive budget from segment length (with safe caps)
+    int maxCoarseSteps = clamp(int(ceil(segmentLen / coarseStep)) + 2, 1, 1024);
+
+    for (int i = 0; i < maxCoarseSteps; i++) {
         if (t >= tHit.y) break;
         vec3 pos = rayOrigin + rayDir * t;
         float d  = sampleSmoke(pos);
@@ -177,12 +194,39 @@ void main() {
     // ---- Phase 2: Fine accumulation (Beer-Lambert) ----
     vec3  color         = vec3(0.0);
     float transmittance = 1.0;
+    int maxFineSteps = clamp(int(ceil(max(tHit.y - t, 0.0) / fineStep)) + 2, 1, 4096);
 
-    for (int i = 0; i < 192; i++) {
+    for (int i = 0; i < maxFineSteps; i++) {
         if (t >= tHit.y) break;
 
-        vec3  pos     = rayOrigin + rayDir * t;
-        float density = sampleSmoke(pos) * u_DensityScale;
+        vec3 pos = rayOrigin + rayDir * t;
+
+        // Base density from flood-fill field (0..1)
+        float rawDensity = sampleSmoke(pos);
+
+        // Edge zone mask: 1 at outer boundary, 0 in dense core
+        float edgeMask = 1.0 - smoothstep(0.0, max(u_EdgeFadeWidth, 1e-4), rawDensity);
+
+        // Animated base UVW for noise lookup
+        vec3 noiseUVW = worldToVolumeUVW(pos) + vec3(u_Time * 0.04);
+
+        // Curl-like warp from offset 3D noise lookups, remapped to [-1,1]
+        vec3 warp = vec3(
+            texture(u_NoiseTex, fract(noiseUVW + vec3(0.00, 0.00, 0.00))).r,
+            texture(u_NoiseTex, fract(noiseUVW + vec3(0.43, 0.17, 0.00))).r,
+            texture(u_NoiseTex, fract(noiseUVW + vec3(0.00, 0.43, 0.17))).r
+        ) * 2.0 - 1.0;
+
+        vec3 extent = max(u_BoundsMax - u_BoundsMin, vec3(1e-5));
+        vec3 voxelUVW = vec3(u_VoxelSize) / extent;
+        vec3 warpedUVW = fract(noiseUVW + warp * edgeMask * u_CurlStrength * voxelUVW);
+
+        float noiseVal = texture(u_NoiseTex, warpedUVW).r;
+
+        // Keep core stable, add noise mostly near boundaries
+        float density = max(rawDensity, 0.0)
+                      * mix(1.0, noiseVal, clamp(edgeMask * u_NoiseStrength, 0.0, 1.0))
+                      * u_DensityScale;
 
         if (density > 0.001) {
             // Simple directional lighting (placeholder — Step 10c adds shadow rays)

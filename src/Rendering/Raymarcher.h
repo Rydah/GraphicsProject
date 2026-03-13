@@ -7,6 +7,7 @@
 #include "core/ComputeShader.h"
 #include "core/Buffer.h"
 #include "core/Texture2D.h"
+#include "core/Texture3D.h"
 #include "core/FullscreenQuad.h"
 #include "core/shader.h"
 #include "Voxel/VoxelDomain.h"
@@ -28,6 +29,9 @@ public:
     float sigmaE       = 1.0f;  // extinction coefficient
     glm::vec3 lightDir   = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
     glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
+    float edgeFadeWidth  = 0.3f;
+    float curlStrength   = 1.5f;
+    float noiseStrength  = 0.9f;
 
     void init(int fullWidth, int fullHeight) {
         halfW = fullWidth  / 2;
@@ -54,11 +58,13 @@ public:
     void render(const SSBOBuffer& smokeBuf,
                 const SSBOBuffer& wallBuf,
                 const Texture2D&  depthTex,
+                const Texture3D&  noiseTex,
                 const VoxelDomain& domain,
                 const glm::mat4& view,
                 const glm::mat4& proj,
                 float zNear, float zFar,
-                int maxDensityVal)
+                int maxDensityVal,
+                float timeSec)
     {
         glm::mat4 invView = glm::inverse(view);
         glm::mat4 invProj = glm::inverse(proj);
@@ -69,6 +75,9 @@ public:
         // Bind depth texture as sampler on unit 0
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, depthTex.ID);
+
+        // Bind Worley noise volume as sampler on unit 1
+        noiseTex.bindSampler(1);
 
         // Bind SSBOs
         smokeBuf.bindBase(0);
@@ -88,12 +97,17 @@ public:
         marchCS.setFloat("u_SigmaE",         sigmaE);
         marchCS.setVec3 ("u_LightDir",       lightDir);
         marchCS.setVec3 ("u_LightColor",     lightColor);
+        marchCS.setFloat("u_Time",           timeSec);
+        marchCS.setFloat("u_EdgeFadeWidth",  edgeFadeWidth);
+        marchCS.setFloat("u_CurlStrength",   curlStrength);
+        marchCS.setFloat("u_NoiseStrength",  noiseStrength);
 
         // ivec2 for texture size
         glUniform2i(glGetUniformLocation(marchCS.ID, "u_TexSize"), halfW, halfH);
 
         // sampler binding
         marchCS.setInt("u_DepthTex", 0);
+        marchCS.setInt("u_NoiseTex", 1);
 
         marchCS.dispatch(halfW, halfH, 1);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);

@@ -108,7 +108,7 @@ void main() {
         cs.setFloat("u_Persistence", 0.5f);
         cs.setFloat("u_Speed", 0.05f);
         cs.dispatch(resolution, resolution, resolution);
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
     }
 
     void destroy() {

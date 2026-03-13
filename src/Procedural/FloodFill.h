@@ -22,14 +22,14 @@ public:
     int seedFlatIdx = -1;
     glm::ivec3 seedCoord = glm::ivec3(0);
 
-    int maxSeedValue = 64;       // maximum flood radius in voxels
+    int maxSeedValue = 50;       // maximum flood radius in voxels
     float elapsedTime = 0.0f;
     float fillDuration = 4.0f;
     bool active = false;
 
     // ---- Ellipsoid shape control ----
-    float radiusXZ = 1.0f;   // horizontal scale
-    float radiusY  = 0.6f;   // vertical scale (smaller = flatter)
+    float radiusXZ = 1.5f;   // horizontal scale
+    float radiusY  = 1.0f;   // vertical scale 
 
     void init(int totalVoxels) {
         pingBuf.allocate(totalVoxels * sizeof(int));
