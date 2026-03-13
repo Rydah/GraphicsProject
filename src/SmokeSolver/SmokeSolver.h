@@ -4,7 +4,7 @@
 #include "SmokeSolver/ComputeDivergence.h"
 #include "SmokeSolver/PressureJacobi.h"
 #include "SmokeSolver/ProjectVelocity.h"
-#include "core/SmokeField.h"
+#include "core/smokeField.h"
 #include "core/Buffer.h"
 
 static constexpr int DEFAULT_ITER_COUNT = 30;

@@ -33,6 +33,7 @@
 
 #include "SmokeSolver/SmokeSolver.h"
 #include "core/SceneDepthPass.h"
+#include "Rendering/Raymarcher.h"
 
 //---------------------------------------------------------------------
 // Window
@@ -50,6 +51,7 @@ static NoiseDebugView    g_noiseView;
 static VelocityDebugView g_velocityDebug;
 static DepthDebugView    g_depthDebug;
 static SceneDepthPass*   g_depthPass = nullptr;
+static bool              g_raymarchEnabled = true;
 
 //---------------------------------------------------------------------
 // GLFW callbacks
@@ -97,6 +99,20 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
 
         if (key == GLFW_KEY_DOWN && (action == GLFW_PRESS || action == GLFW_REPEAT))
             g_noiseView.sliceZ = glm::max(g_noiseView.sliceZ - 0.02f, 0.0f);
+    }
+
+    // Ray march toggle
+    if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+        g_raymarchEnabled = !g_raymarchEnabled;
+
+        // Keep debug views mutually exclusive when ray march is on
+        if (g_raymarchEnabled) {
+            g_noiseView.enabled     = false;
+            g_velocityDebug.enabled = false;
+            g_depthDebug.enabled    = false;
+        }
+
+        std::cout << "Raymarcher: " << (g_raymarchEnabled ? "ON" : "OFF") << "\n";
     }
 
     // Depth debug toggle
@@ -215,6 +231,10 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     depthPass.init(winWidth, winHeight);
     g_depthPass = &depthPass;
 
+    // --- Raymarcher ---
+    Raymarcher raymarcher;
+    raymarcher.init(winWidth, winHeight);
+
     g_voxelizer = &voxelizer;
     g_floodFill = &floodFill;
 
@@ -261,8 +281,9 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Resize depth pass if window changed
+        // Resize passes if window changed
         depthPass.resize(winWidth, winHeight);
+        raymarcher.resize(winWidth, winHeight);
 
         // --- Camera matrices ---
         float aspect = (float)winWidth / (float)winHeight;
@@ -287,6 +308,19 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
         solver.step(smoke, voxelizer.staticVoxels, dt);
 
+        // --- Ray march (default ON; toggle with R) ---
+        if (g_raymarchEnabled) {
+            raymarcher.render(
+                floodFill.currentBuffer(),
+                voxelizer.staticVoxels,
+                depthPass.depthTex,
+                voxelizer.domain,
+                view, proj,
+                0.001f, 100.0f,      // zNear, zFar (match OrbitCamera defaults)
+                floodFill.maxSeedValue
+            );
+        }
+
         // --- Debug / render modes ---
         if (g_noiseView.enabled) {
             g_noiseView.draw(worleyNoise.texture, fsQuad);
@@ -294,16 +328,37 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         else if (g_depthDebug.enabled) {
             g_depthDebug.draw(depthPass.depthTex, fsQuad);
         }
-        else {
-            voxelDebug.drawWithSmoke(
+        else if (g_velocityDebug.enabled) {
+            g_velocityDebug.draw(
+                voxelizer.domain,
+                smoke.getSrcVelocity(),
                 voxelizer.staticVoxels,
-                floodFill.currentBuffer(),
-                view,
-                proj,
-                voxelizer.domain.gridSize,
-                voxelizer.domain.boundsMin,
-                voxelizer.domain.voxelSize
+                view, proj
             );
+        }
+        else {
+            // Normal mode:
+            // - R ON  -> walls + volumetric raymarched smoke
+            // - R OFF -> voxel debug smoke cubes (yellow/orange)
+            if (g_raymarchEnabled) {
+                voxelDebug.draw(
+                    voxelizer.staticVoxels,
+                    view, proj,
+                    voxelizer.domain.gridSize,
+                    voxelizer.domain.boundsMin,
+                    voxelizer.domain.voxelSize
+                );
+                raymarcher.blit(fsQuad);
+            } else {
+                voxelDebug.drawWithSmoke(
+                    voxelizer.staticVoxels,
+                    floodFill.currentBuffer(),
+                    view, proj,
+                    voxelizer.domain.gridSize,
+                    voxelizer.domain.boundsMin,
+                    voxelizer.domain.voxelSize
+                );
+            }
         }
 
         glfwSwapBuffers(window);
@@ -315,6 +370,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     g_depthPass  = nullptr;
 
     depthPass.destroy();
+    raymarcher.destroy();
     solver.destroy();
     smoke.destroy();
 
