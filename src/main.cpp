@@ -189,17 +189,32 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
         float step = glm::max(domain.voxelSize * 0.5f, 1e-4f);
         int maxSteps = glm::clamp((int)glm::ceil((tExit - t) / step) + 2, 1, 4096);
 
+        // March through air, track the last air voxel before a surface.
+        // Skip any solid voxels at the ray entry (outer shell), then seed
+        // at the last air voxel before the ray hits an interior wall or floor.
+        glm::ivec3 lastAirVoxel(-1);
+        bool inAir = false;
         bool seeded = false;
+
         for (int i = 0; i < maxSteps; ++i) {
             glm::vec3 worldPos = rayOrigin + rayDir * t;
             glm::ivec3 c = domain.worldToGrid(worldPos);
             int idx = domain.flatten(c);
 
-            if (idx >= 0 && idx < (int)g_wallVoxelCache.size() && g_wallVoxelCache[idx] == 0) {
-                glm::vec3 seedPos = domain.gridToWorldCenter(glm::vec3(c));
-                g_floodFill->seed(seedPos, domain.gridSize, domain.boundsMin, domain.voxelSize);
-                seeded = true;
-                break;
+            if (idx >= 0 && idx < (int)g_wallVoxelCache.size()) {
+                int voxVal = g_wallVoxelCache[idx];
+                if (voxVal == 0) {
+                    // Air - keep advancing and remember this voxel
+                    inAir = true;
+                    lastAirVoxel = c;
+                } else if (inAir) {
+                    // Hit a solid surface after passing through air - seed here
+                    glm::vec3 seedPos = domain.gridToWorldCenter(glm::vec3(lastAirVoxel));
+                    g_floodFill->seed(seedPos, domain.gridSize, domain.boundsMin, domain.voxelSize);
+                    seeded = true;
+                    break;
+                }
+                // else: still traversing outer shell before entering interior - skip
             }
 
             t += step;
@@ -207,7 +222,7 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
         }
 
         if (!seeded) {
-            std::cout << "Click hit no valid air voxel for smoke seed.\n";
+            std::cout << "Click hit no valid surface for smoke seed.\n";
         }
     }
 }
