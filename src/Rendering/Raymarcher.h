@@ -64,7 +64,11 @@ public:
                 const glm::mat4& proj,
                 float zNear, float zFar,
                 int maxDensityVal,
-                float timeSec)
+                float timeSec,
+                glm::vec3 seedWorldPos,
+                int maxSeedVal,
+                float radiusXZ,
+                float radiusY)
     {
         glm::mat4 invView = glm::inverse(view);
         glm::mat4 invProj = glm::inverse(proj);
@@ -101,6 +105,10 @@ public:
         marchCS.setFloat("u_EdgeFadeWidth",  edgeFadeWidth);
         marchCS.setFloat("u_CurlStrength",   curlStrength);
         marchCS.setFloat("u_NoiseStrength",  noiseStrength);
+        marchCS.setVec3 ("u_SeedWorldPos",   seedWorldPos);
+        marchCS.setInt  ("u_MaxSeedVal",     maxSeedVal);
+        marchCS.setFloat("u_RadiusXZ",       radiusXZ);
+        marchCS.setFloat("u_RadiusY",        radiusY);
 
         // ivec2 for texture size
         glUniform2i(glGetUniformLocation(marchCS.ID, "u_TexSize"), halfW, halfH);

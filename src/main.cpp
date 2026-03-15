@@ -364,7 +364,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         // --- GPU simulation ---
         worleyNoise.generate(time);
 
-        floodFill.propagate(4,
+        floodFill.propagate(12,
                             voxelizer.domain.gridSize,
                             voxelizer.domain.boundsMin,
                             voxelizer.domain.voxelSize,
@@ -382,9 +382,13 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
                 worleyNoise.texture,
                 voxelizer.domain,
                 view, proj,
-                0.001f, 100.0f,      // zNear, zFar (match OrbitCamera defaults)
+                0.001f, 100.0f,
+                floodFill.effectiveMaxDensity(),
+                time,
+                floodFill.seedWorldPos,
                 floodFill.maxSeedValue,
-                time
+                floodFill.radiusXZ,
+                floodFill.radiusY
             );
         }
 

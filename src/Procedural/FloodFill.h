@@ -20,16 +20,27 @@ public:
     bool pingIsSrc = true;
 
     int seedFlatIdx = -1;
-    glm::ivec3 seedCoord = glm::ivec3(0);
+    glm::ivec3 seedCoord    = glm::ivec3(0);
+    glm::vec3  seedWorldPos = glm::vec3(0);
 
-    int maxSeedValue = 50;       // maximum flood radius in voxels
+    int maxSeedValue = 25;       // ellipsoid Y semi-axis in voxels
     float elapsedTime = 0.0f;
     float fillDuration = 4.0f;
     bool active = false;
 
     // ---- Ellipsoid shape control ----
-    float radiusXZ = 1.5f;   // horizontal scale
-    float radiusY  = 1.0f;   // vertical scale 
+    float radiusXZ = 1.5f;   // horizontal scale relative to Y
+    float radiusY  = 1.0f;   // vertical scale (base)
+
+    // Extra path-length budget beyond the ellipsoid surface, lets smoke
+    // squeeze around wall gaps near the ellipsoid edge.
+    float wallDetourFactor = 1.2f;
+
+    // Max value that can be stored in the buffer (used by raymarcher to normalise).
+    // = maxSeedValue * max(radiusXZ, radiusY) * wallDetourFactor
+    int effectiveMaxDensity() const {
+        return (int)(maxSeedValue * glm::max(radiusXZ, radiusY) * wallDetourFactor) + 1;
+    }
 
     void init(int totalVoxels) {
         pingBuf.allocate(totalVoxels * sizeof(int));
@@ -49,10 +60,11 @@ public:
 
         coord = glm::clamp(coord, glm::ivec3(0), gridSize - 1);
 
-        seedCoord = coord;
-        seedFlatIdx = coord.x +
-                      coord.y * gridSize.x +
-                      coord.z * gridSize.x * gridSize.y;
+        seedCoord    = coord;
+        seedWorldPos = worldPos;
+        seedFlatIdx  = coord.x +
+                       coord.y * gridSize.x +
+                       coord.z * gridSize.x * gridSize.y;
 
         pingBuf.clear();
         pongBuf.clear();
@@ -81,16 +93,22 @@ public:
         int currentSeedVal = (int)(easeIn(t) * maxSeedValue);
         if (currentSeedVal < 1) currentSeedVal = 1;
 
+        // Flood budget must always exceed the largest ellipsoid semi-axis so the
+        // fill is never the bottleneck in open space.  wallDetourFactor gives extra
+        // path length for smoke to travel around walls before running dry.
+        float maxSemiAxis = glm::max(radiusXZ, radiusY);
+        int floodBudget = glm::max(1, (int)(currentSeedVal * maxSemiAxis * wallDetourFactor));
+
         for (int i = 0; i < steps; i++) {
 
             SSBOBuffer& src = pingIsSrc ? pingBuf : pongBuf;
             SSBOBuffer& dst = pingIsSrc ? pongBuf : pingBuf;
 
-            // ---- Re-seed growing value ----
+            // ---- Re-seed with the large flood budget ----
             src.bindBase(1);
             seedCS.use();
             seedCS.setInt("u_SeedIdx", seedFlatIdx);
-            seedCS.setInt("u_SeedVal", currentSeedVal);
+            seedCS.setInt("u_SeedVal", floodBudget);
             glDispatchCompute(1, 1, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
@@ -100,11 +118,11 @@ public:
             dst.bindBase(2);
 
             fillCS.use();
-            fillCS.setIVec3("u_GridSize", gridSize);
-            fillCS.setIVec3("u_SeedCoord", seedCoord);
-            fillCS.setInt("u_MaxSeedVal", currentSeedVal);
-            fillCS.setFloat("u_RadiusXZ", radiusXZ);
-            fillCS.setFloat("u_RadiusY", radiusY);
+            fillCS.setIVec3("u_GridSize",   gridSize);
+            fillCS.setIVec3("u_SeedCoord",  seedCoord);
+            fillCS.setInt  ("u_MaxSeedVal", currentSeedVal);
+            fillCS.setFloat("u_RadiusXZ",   radiusXZ);
+            fillCS.setFloat("u_RadiusY",    radiusY);
 
             fillCS.dispatch(gridSize.x, gridSize.y, gridSize.z);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -165,7 +183,7 @@ layout(std430, binding = 2) writeonly buffer DstBuf { int dst[]; };
 
 uniform ivec3 u_GridSize;
 uniform ivec3 u_SeedCoord;
-uniform int   u_MaxSeedVal;
+uniform int   u_MaxSeedVal;   // current unscaled radius (grows 1..maxSeedValue)
 uniform float u_RadiusXZ;
 uniform float u_RadiusY;
 
@@ -180,82 +198,50 @@ void main() {
 
     int idx = flatIdx(coord);
 
-    // Block walls
-    if (walls[idx] != 0) {
-        dst[idx] = 0;
-        return;
-    }
+    if (walls[idx] != 0) { dst[idx] = 0; return; }
 
-    // ---- Ellipsoid constraint ----
-    vec3 diff = vec3(coord - u_SeedCoord);
-
-    float dx = diff.x / (u_MaxSeedVal * u_RadiusXZ);
-    float dy = diff.y / (u_MaxSeedVal * u_RadiusY);
-    float dz = diff.z / (u_MaxSeedVal * u_RadiusXZ);
-
-    float ellipsoidDist = dx*dx + dy*dy + dz*dz;
-
-    // Outside ellipsoid → kill value
-    if (ellipsoidDist > 1.0) {
-        dst[idx] = 0;
-        return;
-    }
-
-    // ---- Normal propagation ----
+    // ---- Flood-fill connectivity (uniform step cost = 1, large budget) ----
+    // The budget always exceeds the ellipsoid semi-axis so in open space the
+    // wavefront always reaches the boundary.  maxVal > 0 means this voxel is
+    // reachable from the seed without passing through a wall.
     int maxVal = src[idx];
+    ivec3 nc; int nIdx;
 
-    ivec3 nc;
-    int nIdx;
-
-    // 6-connected neighbors
     nc = coord + ivec3(-1,0,0);
-    if (nc.x >= 0) {
-        nIdx = flatIdx(nc);
-        if (walls[nIdx] == 0)
-            maxVal = max(maxVal, src[nIdx] - 1);
-    }
+    if (nc.x >= 0)            { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
 
     nc = coord + ivec3(1,0,0);
-    if (nc.x < u_GridSize.x) {
-        nIdx = flatIdx(nc);
-        if (walls[nIdx] == 0)
-            maxVal = max(maxVal, src[nIdx] - 1);
-    }
+    if (nc.x < u_GridSize.x)  { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
 
     nc = coord + ivec3(0,-1,0);
-    if (nc.y >= 0) {
-        nIdx = flatIdx(nc);
-        if (walls[nIdx] == 0)
-            maxVal = max(maxVal, src[nIdx] - 1);
-    }
+    if (nc.y >= 0)            { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
 
     nc = coord + ivec3(0,1,0);
-    if (nc.y < u_GridSize.y) {
-        nIdx = flatIdx(nc);
-        if (walls[nIdx] == 0)
-            maxVal = max(maxVal, src[nIdx] - 1);
-    }
+    if (nc.y < u_GridSize.y)  { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
 
     nc = coord + ivec3(0,0,-1);
-    if (nc.z >= 0) {
-        nIdx = flatIdx(nc);
-        if (walls[nIdx] == 0)
-            maxVal = max(maxVal, src[nIdx] - 1);
-    }
+    if (nc.z >= 0)            { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
 
     nc = coord + ivec3(0,0,1);
-    if (nc.z < u_GridSize.z) {
-        nIdx = flatIdx(nc);
-        if (walls[nIdx] == 0)
-            maxVal = max(maxVal, src[nIdx] - 1);
-    }
-    
-    if (maxVal <= 0) {
-        dst[idx] = 0;
-    } else {
-        dst[idx] = max(maxVal, 0);
-    }
-    
+    if (nc.z < u_GridSize.z)  { nIdx = flatIdx(nc); if (walls[nIdx] == 0) maxVal = max(maxVal, src[nIdx] - 1); }
+
+    // Not reachable from seed
+    if (maxVal <= 0) { dst[idx] = 0; return; }
+
+    // ---- Ellipsoid hard boundary ----
+    // Voxels outside the current growing ellipsoid are zeroed.
+    // The smooth density gradient is computed in the raymarcher using the
+    // seed world position and ellipsoid parameters, avoiding the L1 diamond
+    // artifact that would result from using the flood-fill budget directly.
+    vec3 diff = vec3(coord - u_SeedCoord);
+    float ex = diff.x / (float(u_MaxSeedVal) * u_RadiusXZ);
+    float ey = diff.y / (float(u_MaxSeedVal) * u_RadiusY);
+    float ez = diff.z / (float(u_MaxSeedVal) * u_RadiusXZ);
+    if (ex*ex + ey*ey + ez*ez > 1.0) { dst[idx] = 0; return; }
+
+    // Store the flood-fill budget so it propagates correctly in future steps.
+    // The raymarch shader converts this to a smooth ellipsoid density.
+    dst[idx] = max(0, maxVal);
 }
 )";
 return src.c_str();
