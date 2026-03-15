@@ -135,38 +135,60 @@ public:
         return true;
     }
 
-    // Generate a procedural test scene: a room with some interior walls
-    void generateTestScene(float voxSize = 0.15f, int gridDim = 64) {
+    // Generate a procedural test scene: a wide arena with interior obstacles.
+    // Outer shell uses voxel type 2 (solid but rendered transparent).
+    // Interior walls use voxel type 1 (solid, opaque).
+    void generateTestScene(float voxSize = 0.15f, int gridX = 96, int gridY = 64, int gridZ = 96) {
         domain.voxelSize = voxSize;
-        domain.gridSize = glm::ivec3(gridDim);
-        domain.totalVoxels = gridDim * gridDim * gridDim;
+        domain.gridSize  = glm::ivec3(gridX, gridY, gridZ);
+        domain.totalVoxels = gridX * gridY * gridZ;
 
         // Bounds centered at origin
-        float halfExtent = (gridDim * domain.voxelSize) * 0.5f;
-        domain.boundsMin = glm::vec3(-halfExtent);
-        domain.boundsMax = glm::vec3(halfExtent);
+        domain.boundsMin = glm::vec3(-(gridX * voxSize)*0.5f, -(gridY * voxSize)*0.5f, -(gridZ * voxSize)*0.5f);
+        domain.boundsMax = glm::vec3( (gridX * voxSize)*0.5f,  (gridY * voxSize)*0.5f,  (gridZ * voxSize)*0.5f);
 
-        // Build wall data on CPU
         std::vector<int> walls(domain.totalVoxels, 0);
 
-        int N = gridDim;
+        int NX = gridX, NY = gridY, NZ = gridZ;
 
-        for (int z = 0; z < N; z++)
-        for (int y = 0; y < N; y++)
-        for (int x = 0; x < N; x++) {
-            // Outer box with open top (no ceiling at y == N-1)
-            bool isShell = (x == 0 || x == N-1 || y == 0 || z == 0 || z == N-1);
+        for (int z = 0; z < NZ; z++)
+        for (int y = 0; y < NY; y++)
+        for (int x = 0; x < NX; x++) {
+            // --- Outer shell (floor + 4 side walls, open ceiling) ---
+            // Type 2 = solid barrier but rendered see-through
+            bool isShell = (x == 0 || x == NX-1 || y == 0 || z == 0 || z == NZ-1);
 
-            // Interior wall 1: vertical wall at x=N/3, with a doorway
-            bool wall1 = (x == N/3) && !(y < N/3 && z > N/3 && z < 2*N/3);
+            if (isShell) {
+                walls[domain.flatten(x, y, z)] = 2;
+                continue;
+            }
 
-            // Interior wall 2: vertical wall at x=2*N/3, with a doorway
-            bool wall2 = (x == 2*N/3) && !(y < N/2 && z > N/4 && z < 3*N/4);
+            // --- Interior obstacles (type 1 = opaque) ---
 
-            // Interior wall 3: horizontal shelf at y=N/2, partial
-            bool wall3 = (y == N/2) && (x > N/4 && x < 3*N/4) && (z > N/4 && z < 3*N/4);
+            // Long wall along X-axis at z=NZ/3, doorway gap in middle
+            bool wall1 = (z == NZ/3) && (x > NX/6 && x < 5*NX/6)
+                      && !(y < NY/2 && x > 2*NX/5 && x < 3*NX/5);
 
-            if (isShell || wall1 || wall2 || wall3) {
+            // Long wall along X-axis at z=2*NZ/3, doorway gap on left side
+            bool wall2 = (z == 2*NZ/3) && (x > NX/6 && x < 5*NX/6)
+                      && !(y < NY/2 && x > NX/5 && x < 2*NX/5);
+
+            // Wall along Z-axis at x=NX/4, partial height, doorway at bottom
+            bool wall3 = (x == NX/4) && (z > NZ/4 && z < 3*NZ/4)
+                      && !(y < NY/3 && z > 5*NZ/12 && z < 7*NZ/12);
+
+            // Wall along Z-axis at x=3*NX/4, partial height, doorway at bottom
+            bool wall4 = (x == 3*NX/4) && (z > NZ/4 && z < 3*NZ/4)
+                      && !(y < NY/3 && z > 5*NZ/12 && z < 7*NZ/12);
+
+            // Low horizontal platform / cover in one quadrant
+            bool platform = (y == NY/5) && (x > NX/3 && x < NX/2) && (z > NZ/3 && z < NZ/2);
+
+            // Small bunker box (hollow not needed - just a solid pillar)
+            bool pillar1 = (x >= 2*NX/5 && x <= 2*NX/5+2) && (z >= 2*NZ/5 && z <= 2*NZ/5+2) && (y < NY/3);
+            bool pillar2 = (x >= 3*NX/5 && x <= 3*NX/5+2) && (z >= 3*NZ/5 && z <= 3*NZ/5+2) && (y < NY/3);
+
+            if (wall1 || wall2 || wall3 || wall4 || platform || pillar1 || pillar2) {
                 walls[domain.flatten(x, y, z)] = 1;
             }
         }

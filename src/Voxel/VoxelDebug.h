@@ -65,9 +65,10 @@ void main() {
     int wallVal = walls[id];
     int smokeVal = (u_Mode == 1) ? smoke[id] : 0;
 
-    bool isWall = wallVal != 0;
+    bool isShellWall = wallVal == 2;
+    bool isWall = wallVal == 1;
     bool isSmoke = smokeVal > 0;
-    v_Alive = (isWall || isSmoke) ? 1 : 0;
+    v_Alive = (wallVal != 0 || isSmoke) ? 1 : 0;
 
     if (v_Alive == 0) {
         gl_Position = vec4(0.0);
@@ -77,10 +78,14 @@ void main() {
     vec3 center = u_BoundsMin + (vec3(x, y, z) + 0.5) * u_VoxelSize;
     vec3 worldPos = center + aPos * u_VoxelSize * 0.9;
 
-    if (isWall) {
+    if (isShellWall) {
+        // Outer boundary walls: barely visible wireframe-like ghost
+        v_Color = vec3(0.4, 0.6, 0.9);
+        v_Alpha = 0.05;
+    } else if (isWall) {
         float t = float(y) / float(u_GridSize.y);
         v_Color = mix(vec3(0.2, 0.5, 0.8), vec3(0.3, 0.6, 1.0), t);
-        v_Alpha = 0.3;
+        v_Alpha = 0.5;
     } else {
         // Smoke: orange-to-white by density
         float d = float(smokeVal) / 255.0;

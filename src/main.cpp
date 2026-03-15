@@ -281,7 +281,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
     // --- Voxel scene (procedural test arena) ---
     Voxelizer voxelizer;
-    voxelizer.generateTestScene(0.15f, 64);
+    voxelizer.generateTestScene(0.15f, 96, 64, 96);
     g_wallVoxelCache = voxelizer.staticVoxels.download<int>(voxelizer.domain.totalVoxels);
 
     VoxelDebug voxelDebug;
