@@ -135,7 +135,7 @@ flat out int v_IsWall;
 void main() {
     int id = gl_InstanceID;
 
-    if (walls[id] == 0) {
+    if (walls[id] != 1) {
         v_IsWall = 0;
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         return;

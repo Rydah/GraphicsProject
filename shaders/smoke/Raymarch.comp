@@ -159,10 +159,8 @@ void main() {
     float cosAngle  = max(dot(rayDir, camForward), 0.001);
     float maxT      = sceneZ / cosAngle;
 
-    // Only clip if depth is valid (not at far plane)
-    if (rawDepth < 0.9999) {
-        tHit.y = min(tHit.y, maxT);
-    }
+    // Always clip — linearizeDepth(1.0) returns far plane so sky pixels are safe
+    tHit.y = min(tHit.y, maxT);
 
     if (tHit.x >= tHit.y) {
         imageStore(u_Output, px, vec4(0.0, 0.0, 0.0, 1.0));
