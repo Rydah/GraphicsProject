@@ -23,13 +23,13 @@ public:
     glm::ivec3 seedCoord    = glm::ivec3(0);
     glm::vec3  seedWorldPos = glm::vec3(0);
 
-    int maxSeedValue = 15;       // ellipsoid Y semi-axis in voxels
+    int maxSeedValue = 12;       // ellipsoid Y semi-axis in voxels
     float elapsedTime = 0.0f;
     float fillDuration = 1.0f;
     bool active = false;
 
     // ---- Ellipsoid shape control ----
-    float radiusXZ = 1.5f;   // horizontal scale relative to Y
+    float radiusXZ = 1.2f;   // horizontal scale relative to Y
     float radiusY  = 1.0f;   // vertical scale (base)
 
     // Extra path-length budget beyond the ellipsoid surface, lets smoke

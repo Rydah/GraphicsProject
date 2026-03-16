@@ -154,10 +154,14 @@ public:
         for (int z = 0; z < NZ; z++)
         for (int y = 0; y < NY; y++)
         for (int x = 0; x < NX; x++) {
-            // --- Outer shell (floor + 4 side walls, open ceiling) ---
-            // Type 2 = solid barrier but rendered see-through
-            bool isShell = (x == 0 || x == NX-1 || y == 0 || z == 0 || z == NZ-1);
-
+            // --- Outer shell ---
+            // Floor (y==0): type 1 = solid opaque
+            if (y == 0) {
+                walls[domain.flatten(x, y, z)] = 1;
+                continue;
+            }
+            // Side walls (type 2 = solid barrier, rendered invisible)
+            bool isShell = (x == 0 || x == NX-1 || z == 0 || z == NZ-1);
             if (isShell) {
                 walls[domain.flatten(x, y, z)] = 2;
                 continue;
