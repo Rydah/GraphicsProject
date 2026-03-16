@@ -23,9 +23,9 @@ public:
     glm::ivec3 seedCoord    = glm::ivec3(0);
     glm::vec3  seedWorldPos = glm::vec3(0);
 
-    int maxSeedValue = 25;       // ellipsoid Y semi-axis in voxels
+    int maxSeedValue = 15;       // ellipsoid Y semi-axis in voxels
     float elapsedTime = 0.0f;
-    float fillDuration = 4.0f;
+    float fillDuration = 1.0f;
     bool active = false;
 
     // ---- Ellipsoid shape control ----
@@ -34,12 +34,12 @@ public:
 
     // Extra path-length budget beyond the ellipsoid surface, lets smoke
     // squeeze around wall gaps near the ellipsoid edge.
-    float wallDetourFactor = 1.2f;
+    float wallDetourFactor = 1.0f;
 
     // Max value that can be stored in the buffer (used by raymarcher to normalise).
-    // = maxSeedValue * max(radiusXZ, radiusY) * wallDetourFactor
+    // Must match the floodBudget formula: maxSeedValue * maxSemiAxis * sqrt2 * wallDetourFactor
     int effectiveMaxDensity() const {
-        return (int)(maxSeedValue * glm::max(radiusXZ, radiusY) * wallDetourFactor) + 1;
+        return (int)(maxSeedValue * glm::max(radiusXZ, radiusY) * 1.4142f * wallDetourFactor) + 1;
     }
 
     void init(int totalVoxels) {
@@ -93,11 +93,11 @@ public:
         int currentSeedVal = (int)(easeIn(t) * maxSeedValue);
         if (currentSeedVal < 1) currentSeedVal = 1;
 
-        // Flood budget must always exceed the largest ellipsoid semi-axis so the
-        // fill is never the bottleneck in open space.  wallDetourFactor gives extra
-        // path length for smoke to travel around walls before running dry.
+        // sqrt(2) is the geometric minimum to reach diagonal corners of the ellipsoid
+        // without leaving a diamond artifact. wallDetourFactor is purely extra budget
+        // for navigating around wall gaps -- tune it independently of shape.
         float maxSemiAxis = glm::max(radiusXZ, radiusY);
-        int floodBudget = glm::max(1, (int)(currentSeedVal * maxSemiAxis * wallDetourFactor));
+        int floodBudget = glm::max(1, (int)(currentSeedVal * maxSemiAxis * 1.4142f * wallDetourFactor));
 
         for (int i = 0; i < steps; i++) {
 
@@ -154,10 +154,8 @@ private:
     ComputeShader fillCS;
 
     float easeIn(float x) {
-        // x^0.25: explosive start (near-vertical slope at t=0),
-        // decelerates aggressively, then crawls through the last ~5-10%.
-        // t=0.01 -> 56%, t=0.50 -> 84%, t=0.90 -> 97%, t=0.95 -> 99%
-        return powf(x, 0.25f);
+        // big explosive start then slowly expand
+        return 1.0f - powf(1.0f - x, 3.0f);
     }
 
     const char* getSeedSource() {

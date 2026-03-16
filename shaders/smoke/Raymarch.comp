@@ -207,23 +207,30 @@ void main() {
 
         vec3 pos = rayOrigin + rayDir * t;
 
-        // Connectivity check: flood-fill value > 0 means this voxel is reachable
-        // from the seed without passing through a wall.
+        // Skip voxels the flood fill never reached.
         float floodVal = sampleSmoke(pos);
         if (floodVal <= 0.001) { t += fineStep; continue; }
 
-        // Smooth ellipsoid density gradient using true L2 distance.
-        // This eliminates the L1 diamond shape that the flood-fill wavefront would produce.
+        // Euclidean ellipsoid distance [0=centre, 1=surface].
         vec3 seedToPos = pos - u_SeedWorldPos;
         float invVS = 1.0 / max(u_VoxelSize, 1e-5);
         float ex = (seedToPos.x * invVS) / (float(u_MaxSeedVal) * u_RadiusXZ);
         float ey = (seedToPos.y * invVS) / (float(u_MaxSeedVal) * u_RadiusY);
         float ez = (seedToPos.z * invVS) / (float(u_MaxSeedVal) * u_RadiusXZ);
-        float ellipDistSq = ex*ex + ey*ey + ez*ez;
-        if (ellipDistSq >= 1.0) { t += fineStep; continue; }
+        float ellipDist = sqrt(ex*ex + ey*ey + ez*ez);
 
-        // rawDensity: 1 at the seed centre, 0 at the ellipsoid surface
-        float rawDensity = 1.0 - sqrt(ellipDistSq);
+        // Path-based distance: voxels reached via long wall detours (e.g. through
+        // a doorway) spent most of their flood budget on the path and arrive with
+        // a low floodVal. Mapping that back to [0,1] naturally suppresses them.
+        float voxelDist = 1.0 - floodVal;  // 0 at seed, ~1 at barely-reached voxels
+
+        // Use the worse of the two distances. In open space ellipDist dominates
+        // (giving a perfect sphere). Doorway leakage is suppressed by voxelDist.
+        float combinedDist = max(ellipDist, voxelDist);
+        if (combinedDist >= 1.0) { t += fineStep; continue; }
+
+        // rawDensity: 1 at the seed centre, 0 at the combined boundary
+        float rawDensity = 1.0 - combinedDist;
 
         // Edge zone mask: 1 at outer boundary, 0 in dense core
         float edgeMask = 1.0 - smoothstep(0.0, max(u_EdgeFadeWidth, 1e-4), rawDensity);
