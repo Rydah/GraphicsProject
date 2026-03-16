@@ -76,7 +76,7 @@ void main() {
     }
 
     vec3 center = u_BoundsMin + (vec3(x, y, z) + 0.5) * u_VoxelSize;
-    vec3 worldPos = center + aPos * u_VoxelSize * 0.9;
+    vec3 worldPos = center + aPos * u_VoxelSize;
 
     if (isShellWall) {
         // Outer boundary walls: barely visible wireframe-like ghost
@@ -85,7 +85,7 @@ void main() {
     } else if (isWall) {
         float t = float(y) / float(u_GridSize.y);
         v_Color = mix(vec3(0.2, 0.5, 0.8), vec3(0.3, 0.6, 1.0), t);
-        v_Alpha = 0.5;
+        v_Alpha = 1.0;
     } else {
         // Smoke: orange-to-white by density
         float d = float(smokeVal) / 255.0;
