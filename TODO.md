@@ -77,6 +77,7 @@ cs2-smoke-opengl/
 │   ├── smoke/
 │   │   ├── Voxelizer.h / .cpp    ← Triangle-AABB SAT voxelization
 │   │   ├── FloodFill.h / .cpp    ← Ping-pong flood fill propagation
+│   │   ├── FluidSolver.h / .cpp  ← Divergence → Jacobi pressure → project → advect density
 │   │   ├── WorleyNoise.h / .cpp  ← 128³ animated noise volume
 │   │   ├── Raymarcher.h / .cpp   ← Volume ray march dispatcher
 │   │   ├── BulletHoleManager.h / .cpp ← SDF capsule holes
@@ -88,6 +89,13 @@ cs2-smoke-opengl/
     ├── fullscreen.vert            ← shared full-screen quad vertex shader
     ├── voxelize.comp              ← Triangle-AABB SAT (one thread per triangle)
     ├── flood_fill.comp            ← 6-neighbor propagation + bullet hole SDF
+    ├── fluid_impulse.comp         ← one-shot radial velocity burst at detonation
+    ├── fluid_buoyancy.comp        ← upward force proportional to local smoke density
+    ├── fluid_divergence.comp      ← per-voxel ∇·V from 6-face velocity differences
+    ├── fluid_pressure.comp        ← single Jacobi pressure iteration (dispatched N×)
+    ├── fluid_project.comp         ← subtract ∇p from velocity + zero wall normals
+    ├── fluid_advect_density.comp  ← semi-Lagrangian density advection along velocity
+    ├── fluid_vorticity.comp       ← vorticity confinement (curl → confinement force)
     ├── worley_noise.comp          ← tiled Worley + fBm → 3D texture
     ├── raymarch.comp              ← full volumetric raymarcher
     ├── upsample.frag              ← Catmull-Rom bicubic reconstruction
@@ -200,6 +208,14 @@ target_link_libraries(cs2smoke glfw assimp::assimp)
 | 1 | Smoke voxels read buffer `int[]` (ping) |
 | 2 | Smoke voxels write buffer `int[]` (pong) |
 | 3 | Bullet holes `GPUBulletHole[]` |
+| 4 | Velocity field (ping) `vec4[]` — xyz = velocity, w unused (16-byte aligned) |
+| 5 | Velocity field (pong) `vec4[]` |
+| 6 | Pressure field (ping) `float[]` |
+| 7 | Pressure field (pong) `float[]` |
+| 8 | Divergence scratch `float[]` (recomputed every pressure-solve step, no ping-pong needed) |
+
+> **Memory budget (64³ grid):** velocity ×2 = 2 MB, pressure ×2 = 0.5 MB, divergence = 0.25 MB → ~3 MB extra on top of the existing smoke grid.
+> **128³:** ~24 MB extra. **256³:** ~196 MB extra — check available VRAM before scaling up.
 
 ---
 
@@ -291,6 +307,59 @@ Use `GL_RGBA16F` / `image2D` for the ray march output (RGB = scattered light, A 
 - **fBm layers:** `for i in 0..octaves: noise += amplitude * worley(pos * 2^i + i*warp)`
   - amplitude × 0.5 per octave; warp offsets sample position per octave (swirling)
 
+### Feature 4b: Fluid-Driven Dynamic Flow (Navier-Stokes on voxel grid)
+
+The incompressible Navier-Stokes continuity equation requires `∇·V = 0` at every voxel every timestep. The pipeline below enforces this and uses the resulting divergence-free velocity field to advect smoke density.
+
+**Divergence of a single voxel cell (central differences):**
+```
+∇·V = [(vx[i+1] - vx[i-1]) + (vy[j+1] - vy[j-1]) + (vz[k+1] - vz[k-1])] / (2 × cellSize)
+```
+Faces adjacent to wall voxels substitute velocity = 0 (no-penetration BC).
+
+**Jacobi pressure update (one iteration, dispatched N times with ping-pong):**
+```
+p_new = [(pL + pR + pD + pU + pB + pF) - div × cellSize²] / 6
+```
+Neumann BC at walls: treat missing neighbor pressure as `p_center` (zero gradient). 20 iterations for 64³ gives acceptable convergence; increase to 30 if pressure ripples are visible.
+
+**Velocity projection (enforces incompressibility + wall deflection):**
+```
+v_new = v_curr - ∇p / cellSize
+      = v_curr - vec3(pR-pL, pU-pD, pF-pB) / (2 × cellSize)
+```
+Post-projection: zero out any velocity component pointing into a solid wall face.
+
+**Semi-Lagrangian advection (stable for any Δt):**
+```
+prevPos  = worldPos - velocity(worldPos) × Δt      // backtrace one step
+density_new[x] = trilinear(density_old, prevPos)   // sample old field at past position
+```
+Unconditionally stable because we always read from a valid cell. Apply a dissipation multiplier ≈ 0.995 per frame to model natural fading.
+
+**Buoyancy force (smoke rises):**
+```
+Fy += u_Buoyancy × (density / 255.0) × Δt
+```
+Optional temperature extension: `Fy += alpha × (T - T_ambient) - beta × density` (Boussinesq approximation). Horizontal drag `v.xz *= (1 - u_HorizDrag × Δt)` prevents lateral drift from accumulating.
+
+**Detonation impulse (one-shot, radial outward burst):**
+```
+dir      = normalize(voxelWorldPos - detonationPos)
+falloff  = smoothstep(u_ImpulseRadius, 0.0, distance)
+velocity = dir × u_ImpulseStrength × falloff
+```
+Inject into velocity ping buffer before the first pressure solve. The solver immediately redistributes this divergent field into divergence-free flow.
+
+**Vorticity confinement (preserve swirling detail vs numerical dissipation):**
+```
+omega    = curl(v)                              // 6-neighbor central differences
+N        = normalize(∇|omega|)                 // gradient of vorticity magnitude
+F_vort   = u_VorticityScale × cross(N, omega) × Δt
+v_new   += F_vort
+```
+The cross product `N × omega` is a tangential force that tightens existing vortex tubes. Without it, smoke settles into smooth laminar flow within seconds. With it, rolling boundary structures persist across the full lifetime of the grenade.
+
 ### Feature 5: SDF Bullet Holes
 - **Tapered capsule SDF:** cylinder with r1 at entry, r2 at exit
   ```
@@ -333,16 +402,32 @@ Use `GL_RGBA16F` / `image2D` for the ray march output (RGB = scattered light, A 
 
 ```
 Each frame:
-1. [CPU] Update flood-fill radius (easing curve)
-2. [GPU] CS_FillStep × N: propagate smoke voxels
-3. [GPU] CS_GenerateNoise: update 128³ Worley noise texture
-4. [GPU] CS_RayMarchSmoke: ray march → smoke color + alpha textures
-5. [GPU] Pass 1 (if low res): Catmull-Rom upsample to full res
-6. [GPU] Pass 2: Composite + sharpen → final image
-7. [GPU] (optional) VisualizeVoxels: draw debug cubes
+1. [CPU]  Update flood-fill radius (easing curve)
+2. [GPU]  CS_FillStep × 1: seed / propagate smoke voxels (runs until radius fully expanded,
+           then disabled — density is carried forward by fluid advection instead)
+
+     ── Fluid simulation (Step 10e) ──
+2b. [GPU]  CS_FluidBuoyancy:    add upward velocity proportional to local smoke density
+2c. [GPU]  CS_FluidVorticity:   vorticity confinement — amplify existing rotation
+2d. [GPU]  CS_FluidDivergence:  compute ∇·V per voxel → divergence scratch buffer
+2e. [GPU]  CS_FluidPressure × 20: Jacobi pressure iterations (ping-pong bindings 6↔7)
+2f. [GPU]  CS_FluidProject:     subtract ∇p from velocity; zero wall-normal components
+2g. [GPU]  CS_FluidAdvectDensity: semi-Lagrangian advect smoke density along velocity
+     ─────────────────────────────────
+
+3. [GPU]  CS_GenerateNoise: update 128³ Worley noise texture
+4. [GPU]  CS_RayMarchSmoke: ray march → smoke color + alpha textures
+           (reads density from fluid advection output, binding 2)
+5. [GPU]  Pass 1 (if low res): Catmull-Rom upsample to full res
+6. [GPU]  Pass 2: Composite + sharpen → final image
+7. [GPU]  (optional) VisualizeVoxels: draw debug cubes
+
+On grenade detonation (one-shot, before first frame):
+   [GPU]  CS_FluidImpulse: inject radial outward velocity burst into velocity ping buffer
 ```
 
-Critical: memory barriers between every GPU→GPU handoff (see barrier table above).
+Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see barrier table above).
+The fluid passes (2b–2g) share bindings 4–8; each dispatch reads one and writes the other of each ping-pong pair.
 
 ---
 
@@ -574,21 +659,95 @@ Critical: memory barriers between every GPU→GPU handoff (see barrier table abo
       Rayleigh is useful for comparison and for haze/atmosphere effects
   - **Verify:** Toggle P key changes visible glow direction; HG shows strong rim-light when backlit
 
-- [ ] **Step 11 — SDF Bullet Holes**
-  - `struct GPUBulletHole { vec4 origin; vec4 forward; float r0, r1, length, elapsed; }`
-  - SSBO of 256 holes, upload each frame
-  - Inside `flood_fill.comp`: evaluate tapered capsule SDF per active hole, zero density inside
-  - `BulletHoleManager::addHole(origin, dir)`, `update(dt)` (expire after 2s), `uploadToGPU()`
-  - Animate radius using easing curve
-  - **Verify:** Keyboard press spawns hole, smoke develops a gap that fades over 2 seconds
+- [ ] **Step 10e — Fluid-Driven Dynamic Smoke Flow**
 
-- [ ] **Step 12 — Catmull-Rom Upsampler**
+  The flood fill gives smoke its wall-aware shape, but motion is static. This step hooks the GPU Navier-Stokes pipeline (divergence → Jacobi pressure → velocity projection → advection) into the simulation loop so smoke actively flows outward on detonation, redirects when it hits walls, rises under buoyancy, and retains visible swirling detail.
+
+  **New SSBOs required:** bindings 4–8 (see binding table above). Allocate in `SmokeSystem` alongside existing smoke SSBOs.
+
+  **`fluid_impulse.comp` — Detonation velocity burst (one-shot)**
+  - Dispatch once when the grenade is triggered, before the first flood-fill step
+  - For each non-wall voxel: compute `dir = normalize(voxelWorldPos - detonationPos)`, `dist = length(...)`, then write `velocity[i] = vec4(dir * u_ImpulseStrength * smoothstep(u_ImpulseRadius, 0.0, dist), 0.0)` to the ping buffer
+  - `u_ImpulseStrength` ≈ 8–15 world-units/s; `u_ImpulseRadius` ≈ half the grid radius
+  - **Why:** gives the pressure solver a divergent initial field to immediately redistribute, driving believable outward expansion in the first dozen frames rather than a uniform blob
+
+  **`fluid_buoyancy.comp` — Upward force from local density**
+  - Run every frame, before the divergence step
+  - `velocity[i].y += u_Buoyancy * (float(smokeGrid[i]) / 255.0) * u_DeltaTime`
+  - Start with `u_Buoyancy` ≈ 1.5; smoke will visibly drift upward relative to the floor
+  - **Gravity extension:** subtract a downward drag term on the x/z components to keep smoke from drifting laterally under numerical error: `velocity[i].xz *= (1.0 - u_HorizDrag * u_DeltaTime)` where `u_HorizDrag` ≈ 0.2
+
+  **`fluid_divergence.comp` — Per-voxel divergence**
+  - Computes `div[i] = (vx[right] - vx[left] + vy[up] - vy[down] + vz[front] - vz[back]) / (2 * cellSize)`
+  - For faces adjacent to a wall voxel, treat that neighbor's velocity component as 0 (no-penetration BC — bakes wall blocking directly into the divergence)
+  - Write result to binding 8 (`float divergence[]`)
+
+  **`fluid_pressure.comp` — Jacobi pressure iteration (dispatched N× per frame)**
+  - Single iteration: `p_new[i] = (pL + pR + pD + pU + pB + pF - divergence[i] * cellSize²) / 6.0`
+  - Neumann BC at solid walls: if a neighbor voxel is a wall, substitute `p_center` for that neighbor's pressure (zero normal gradient — prevents pressure leaking into geometry)
+  - Ping-pong between bindings 6 and 7; swap binding pointers on CPU, not on GPU
+  - **Iteration count:** 20 iterations for a 64³ grid fits comfortably in 4–5 ms. Reduce to 15 if total frame time exceeds budget. 30+ is unnecessary at this resolution
+
+  **`fluid_project.comp` — Subtract pressure gradient + enforce wall BCs**
+  - `velocity[i].xyz -= (vec3(pR-pL, pU-pD, pF-pB) / (2.0 * cellSize))`
+  - After subtraction, zero out any velocity component that points into an adjacent wall: if the `+x` neighbor is a wall and `velocity[i].x > 0`, set `velocity[i].x = 0`. Repeat for all 6 faces.
+  - This is the step that produces the wall-deflection effect: smoke that would penetrate a surface instead turns and flows along it
+
+  **`fluid_advect_density.comp` — Semi-Lagrangian density transport**
+  - For each fluid voxel: backtrace `prevPos = worldPos - velocity[i].xyz * u_DeltaTime`; trilinear-sample `smokeGrid` at `prevPos` (the same 8-corner lerp used in the ray marcher); write result to the smoke pong buffer; multiply by `u_Dissipation` (≈ 0.995) to model slow fading
+  - **Why semi-Lagrangian:** forward advection (`newGrid[pos + v*dt] += density`) scatters values, causes gaps, and can explode. Pulling from the past is unconditionally stable regardless of timestep
+  - Run **instead of** the regular flood-fill propagation step once the velocity field is initialised; the flood fill only seeds the initial density blob at detonation
+
+  **`fluid_vorticity.comp` — Vorticity confinement (optional but impactful)**
+  - Compute `omega = curl(v)` at each voxel via central differences over 6 neighbors:
+    ```glsl
+    omega.x = (v[y+1].z - v[y-1].z - v[z+1].y + v[z-1].y) * invH;
+    omega.y = (v[z+1].x - v[z-1].x - v[x+1].z + v[x-1].z) * invH;
+    omega.z = (v[x+1].y - v[x-1].y - v[y+1].x + v[y-1].x) * invH;
+    ```
+  - Compute gradient of `|omega|` (another 6-neighbor pass), normalize to get `N`
+  - Apply: `velocity[i].xyz += cross(N, omega) * u_VorticityScale * u_DeltaTime`
+  - `u_VorticityScale` ≈ 0.2–0.4 for 64³; higher values produce tighter visible swirls but can go unstable above 0.8
+  - Run after buoyancy, before divergence. This is the step that counteracts numerical dissipation — without it the simulation converges to a smooth laminar flow after a few hundred frames; with it, rolling smoke balls and edge vortices persist
+  - **Why it matters for wall interaction:** when smoke deflects along a wall, vorticity confinement amplifies the shear layer at the deflection boundary, creating visible smoke rolls along the wall face — much closer to real CS2 behaviour
+
+  **`FluidSolver` C++ class**
+  - Owns the 5 new SSBOs (vel ping/pong, pressure ping/pong, divergence)
+  - Public API: `seed(detonationWorldPos)` (one-shot impulse), `step(deltaTime, jacobiIters)` (per-frame)
+  - `step()` order: buoyancy → vorticity confinement → divergence → Jacobi ×N → project → advect density
+  - Insert all required `GL_SHADER_STORAGE_BARRIER_BIT` barriers between each dispatch
+
+  **Integration with existing SmokeSystem frame order:**
+  ```
+  [FRAME START]
+  1. CPU: update flood-fill radius (kept for initial shape seeding only)
+  2. GPU: FloodFill × 1 step (seeds density; skip once radius is fully expanded)
+  3. GPU: FluidSolver::step()
+       3a. fluid_buoyancy       ← adds upward velocity
+       3b. fluid_vorticity      ← amplifies existing rotation
+       3c. fluid_divergence     ← measures how non-divergence-free velocity is
+       3d. fluid_pressure × 20  ← Jacobi solve
+       3e. fluid_project        ← make velocity divergence-free; deflect at walls
+       3f. fluid_advect_density ← move smoke density along solved velocity
+  4. GPU: WorleyNoise update
+  5. GPU: Raymarch (reads advected density from step 3f output)
+  ...
+  ```
+
+  **Expected visual improvements:**
+  - **Expansion:** smoke puffs outward in a pressure-wave pattern rather than uniform sphere inflation
+  - **Wall reaction:** smoke flowing into a wall pressure-stalls, turns, and streams along the surface — visible as a fan-out sheet at the wall face
+  - **Gravity / buoyancy:** the cloud tilts upward over time; the bottom edge thins before the top
+  - **Turbulence:** vorticity confinement causes visible swirling rolls at the cloud boundary, matching the billowing behaviour in the reference video
+  - **Verify:** seed grenade near a wall corner; smoke should bend around the corner and fill both sides over 2–3 seconds rather than linearly spreading
+
+- [ ] **Step 11 — Catmull-Rom Upsampler**
   - `upsample.frag`: 4×4 Catmull-Rom kernel, weights formula above
   - Clamp transmittance channel to [0,1] after upsampling
   - `Upsampler::upsample(halfResTex, fullResFBO)`
   - **Verify:** Compare bilinear vs Catmull-Rom — cubic has sharper smoke edges
 
-- [ ] **Step 13 — Compositor + Sharpening**
+- [ ] **Step 12 — Compositor + Sharpening**
   - `composite.frag`:
     - Laplacian unsharp mask on smoke color before blend
     - `finalColor = scene * transmittance + smokeSharpened * (1 - transmittance)`
