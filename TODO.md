@@ -45,6 +45,7 @@ standalone C++ application using OpenGL compute shaders, SSBOs, and FBOs — no 
 | **GLAD** | OpenGL 4.3 Core function loader | Generate at https://glad.dav1d.de (GL 4.3, Core) — adds a single `glad.c` file |
 | **GLM** | Math (vec3, mat4, glm::inverse, etc.) | `vcpkg install glm` |
 | **Assimp** | Mesh loading for voxelizer | `vcpkg install assimp` |
+| **Dear ImGui** | Immediate-mode UI (sliders, buttons, dropdowns) | Clone `ocornut/imgui`, add `backends/imgui_impl_glfw.cpp` + `imgui_impl_opengl3.cpp` to build |
 | **CMake 3.20+** | Build system | cmake.org |
 
 ---
@@ -758,18 +759,80 @@ The fluid passes (2b–2g) share bindings 4–8; each dispatch reads one and wri
 
 ### Phase 4: Debug + Integration
 
-- [ ] **Step 14 — Debug Voxel Visualization**
-  - `voxel_debug.vert`: reconstruct 3D coord from `gl_InstanceID`, push degenerate if voxels[i]==0
-  - Color by density value, unit cube geometry
-  - `glDrawArraysInstanced(GL_TRIANGLES, 0, 36, gridX*gridY*gridZ)`
-  - Toggle with keyboard key
-  - **Verify:** Colored cube grid visible, toggles on/off
+- [ ] **Step 14 — Camera Controls + ImGui Parameter UI**
+
+  **Part A — FPS-style camera (WASD + mouse look)**
+  - Aiming (mouse look) is already done. Add movement to `Camera.cpp`:
+    - `W/S` — move forward/backward along the camera's flat ground plane (ignore pitch so you don't fly)
+    - `A/D` — strafe left/right
+    - `Q/E` or `Space/Ctrl` — move straight up/down in world space
+    - Scroll wheel — multiply move speed (default 5 units/s; scroll up = faster, useful for large scenes)
+  - In `main.cpp` GLFW key callback: pass held-key state to `Camera::update(deltaTime)`; do not use single-press events for movement or it will feel stuttery
+  - Right-click to capture mouse (hide cursor + raw input), right-click again or `Escape` to release — this way the UI remains clickable when not in camera mode
+  - **Verify:** Can smoothly walk through the room, inspect smoke from any angle
+
+  **Part B — Dear ImGui integration**
+  - Add ImGui source files to CMake: `imgui.cpp`, `imgui_draw.cpp`, `imgui_tables.cpp`, `imgui_widgets.cpp`, `backends/imgui_impl_glfw.cpp`, `backends/imgui_impl_opengl3.cpp`
+  - Init in `main.cpp` after GLAD + window creation:
+    ```cpp
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 430");
+    ```
+  - Each frame: call `ImGui_ImplOpenGL3_NewFrame()` + `ImGui_ImplGlfw_NewFrame()` + `ImGui::NewFrame()` before scene render, then `ImGui::Render()` + `ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData())` after
+  - When mouse is captured for camera, call `ImGui::GetIO().WantCaptureMouse` to block ImGui from stealing clicks
+
+  **Part C — Parameter sliders (single `ImGui::Begin("Smoke Grenade")` window)**
+
+  Group into collapsible sections with `ImGui::CollapsingHeader`:
+
+  *Grenade Controls*
+  - `ImGui::Button("Throw Grenade [Space]")` — same action as Space key; resets simulation and seeds at aim point
+  - `ImGui::Button("Reset")` — clears smoke + velocity field without re-throwing
+  - `ImGui::SliderFloat("Expansion Speed", &floodFillStepsPerFrame, 1, 8)` — how many flood-fill steps run per frame; lower = slower cinematic expand, higher = instant fill
+
+  *Smoke Volume*
+  - `ImGui::SliderFloat("Density Scale", &u_DensityScale, 0.1, 5.0)` — overall opacity; low = wispy, high = opaque wall
+  - `ImGui::SliderFloat("Scattering σ_s", &u_SigmaS, 0.1, 10.0)` — how much light bounces inside the cloud (higher = brighter, whiter smoke)
+  - `ImGui::SliderFloat("Absorption σ_a", &u_SigmaA, 0.0, 5.0)` — how much light is absorbed (higher = darker, denser-looking smoke)
+  - `ImGui::SliderFloat("Dissipation", &u_Dissipation, 0.98, 1.0, "%.4f")` — per-frame density decay from advection; 1.0 = smoke never fades, 0.98 = fades in ~2 s
+
+  *Phase Function (light scattering shape)*
+  - `ImGui::RadioButton("Henyey-Greenstein", &u_PhaseMode, 0)` / `ImGui::RadioButton("Rayleigh", &u_PhaseMode, 1)` — side by side; HG is physically correct for smoke, Rayleigh looks more like haze/fog
+  - `ImGui::SliderFloat("HG Anisotropy g", &u_G, -1.0, 1.0)` — only relevant when HG selected; 0 = uniform glow, 0.4 = forward scatter (bright toward light), negative = backscatter; **this one has the most dramatic visual effect**
+
+  *Noise & Edge Detail*
+  - `ImGui::SliderFloat("Noise Strength", &u_NoiseStrength, 0.0, 1.0)` — how much Worley noise breaks up the smoke boundary; 0 = smooth sphere, 1 = fully fluffy
+  - `ImGui::SliderFloat("Edge Fade Width", &u_EdgeFadeWidth, 0.05, 0.6)` — how wide the noisy transition zone is at the cloud boundary
+  - `ImGui::SliderFloat("Curl Strength", &u_CurlStrength, 0.0, 4.0)` — how much domain warp distorts the edge (higher = more turbulent wisps)
+  - `ImGui::SliderFloat("Noise Speed", &u_NoiseSpeed, 0.0, 0.2)` — animation rate of the Worley texture; 0 = frozen, 0.05 = slow drift, 0.2 = fast boiling
+
+  *Fluid Simulation*
+  - `ImGui::SliderFloat("Buoyancy", &u_Buoyancy, 0.0, 5.0)` — upward lift; 0 = smoke stays flat on the ground, 3+ = smoke rises quickly to ceiling
+  - `ImGui::SliderFloat("Vorticity Scale", &u_VorticityScale, 0.0, 1.0)` — swirling intensity at cloud edges; 0 = smooth diffusion, 0.5+ = visible rolling vortex rings
+  - `ImGui::SliderInt("Pressure Iterations", &u_JacobiIters, 5, 40)` — higher = more accurate divergence-free flow (better wall deflection) at the cost of GPU time; 20 is the default sweet spot
+  - `ImGui::SliderFloat("Impulse Strength", &u_ImpulseStrength, 1.0, 30.0)` — initial explosion velocity; higher = smoke punches outward more aggressively before settling
+
+  *Lighting*
+  - `ImGui::SliderFloat("Light Azimuth", &lightAzimuth, 0, 360)` + `ImGui::SliderFloat("Light Elevation", &lightElevation, 5, 85)` — rebuild `u_LightDir` from spherical coords each frame
+  - `ImGui::ColorEdit3("Light Color", &u_LightColor[0])` — tint the light; try warm orange for sunset or cool blue for night scenes
+  - `ImGui::SliderFloat("Ambient", &u_AmbientStrength, 0.0, 0.5)` — base illumination inside the cloud so deeply shadowed regions aren't pitch black
+
+  - **Verify:** Drag HG g from -1 → +1 while looking toward the light — the bright lobe should visibly swing from backlit rim to front-facing; drag Buoyancy to 3 and watch smoke curl toward the ceiling
 
 - [ ] **Step 15 — SmokeSystem Integration + main.cpp**
   - `SmokeSystem` orchestrates all subsystems in correct frame order (see Frame Order above)
   - Insert all required memory barriers between steps
-  - `main.cpp`: GLFW key callbacks for grenade (Space), bullet (F), debug (V, 1/2/3)
-  - **Verify:** Full end-to-end frame: smoke spawns, propagates, renders, bullets deform it
+  - `main.cpp` key bindings:
+    - `Space` — throw grenade at aim point (also available via ImGui button)
+    - `F` — fire bullet (SDF hole)
+    - `Right Mouse` — toggle mouse capture for camera look
+    - `W/A/S/D`, `Q/E` — camera movement (only when mouse is captured)
+    - `Scroll` — camera speed multiplier
+    - `Escape` — release mouse / close
+  - All smoke parameters live in a plain `SmokeParams` struct on the CPU; upload changed values to shader uniforms each frame (only re-upload if dirty flag set)
+  - **Verify:** Full end-to-end frame: smoke spawns, propagates, renders, bullets deform it; ImGui window visible and sliders update smoke in real time
 
 ---
 
