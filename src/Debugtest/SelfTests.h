@@ -7,9 +7,9 @@
 #include <vector>
 #include <cmath>
 
-#include "ComputeShader.h"
-#include "Buffer.h"
-#include "Texture3D.h"
+#include "core/ComputeShader.h"
+#include "core/Buffer.h"
+#include "core/Texture3D.h"
 
 // GPU self-tests run once at startup to verify the compute pipeline works.
 // Call runAllTests() after GLAD is loaded and an OpenGL context is active.

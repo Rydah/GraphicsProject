@@ -9,21 +9,24 @@
 #include <sstream>
 #include <iostream>
 
-#include "ComputeShader.h"
-#include "Buffer.h"
+#include "VoxelDomain.h"
+#include "core/ComputeShader.h"
+#include "core/Buffer.h"
+#include "glVersion.h"
 
 class Voxelizer {
 public:
     SSBOBuffer staticVoxels;   // binding 0: wall grid (1 = solid, 0 = empty)
-    glm::ivec3 gridSize;
-    glm::vec3  boundsMin;
-    glm::vec3  boundsMax;
-    float      voxelSize;
-    int        totalVoxels;
+    // glm::ivec3 gridSize;
+    // glm::vec3  boundsMin;
+    // glm::vec3  boundsMax;
+    // float      voxelSize;
+    // int        totalVoxels;
+    VoxelDomain domain;
 
     // Load mesh from OBJ, compute grid, run voxelize compute shader
     bool voxelizeMesh(const std::string& path, float voxSize = 0.15f) {
-        voxelSize = voxSize;
+        domain.voxelSize = voxSize;
 
         // --- Load triangles from OBJ ---
         std::vector<glm::vec3> positions;
@@ -63,23 +66,23 @@ public:
         }
 
         // --- Compute AABB ---
-        boundsMin = glm::vec3(1e30f);
-        boundsMax = glm::vec3(-1e30f);
+        domain.boundsMin = glm::vec3(1e30f);
+        domain.boundsMax = glm::vec3(-1e30f);
         for (auto& p : positions) {
-            boundsMin = glm::min(boundsMin, p);
-            boundsMax = glm::max(boundsMax, p);
+            domain.boundsMin = glm::min(domain.boundsMin, p);
+            domain.boundsMax = glm::max(domain.boundsMax, p);
         }
         // Pad bounds by one voxel
-        boundsMin -= glm::vec3(voxelSize);
-        boundsMax += glm::vec3(voxelSize);
+        domain.boundsMin -= glm::vec3(domain.voxelSize);
+        domain.boundsMax += glm::vec3(domain.voxelSize);
 
-        glm::vec3 extent = boundsMax - boundsMin;
-        gridSize = glm::ivec3(glm::ceil(extent / voxelSize));
-        totalVoxels = gridSize.x * gridSize.y * gridSize.z;
+        glm::vec3 extent = domain.boundsMax - domain.boundsMin;
+        domain.gridSize = glm::ivec3(glm::ceil(extent / domain.voxelSize));
+        domain.totalVoxels = domain.gridSize.x * domain.gridSize.y * domain.gridSize.z;
 
         std::cout << "Voxelizer: " << faces.size() << " triangles, grid "
-                  << gridSize.x << "x" << gridSize.y << "x" << gridSize.z
-                  << " = " << totalVoxels << " voxels" << std::endl;
+                  << domain.gridSize.x << "x" << domain.gridSize.y << "x" << domain.gridSize.z
+                  << " = " << domain.totalVoxels << " voxels" << std::endl;
 
         // --- Build triangle SSBO (vec4 for std430 alignment) ---
         // struct Triangle { vec4 v0, v1, v2; } - 48 bytes each
@@ -101,7 +104,7 @@ public:
         triBuffer.upload(tris);
 
         // --- Allocate static voxel SSBO and clear ---
-        staticVoxels.allocate(totalVoxels * sizeof(int));
+        staticVoxels.allocate(domain.totalVoxels * sizeof(int));
         staticVoxels.clear();
 
         // --- Setup and dispatch compute shader ---
@@ -112,16 +115,16 @@ public:
         staticVoxels.bindBase(1);   // output voxels
 
         voxCS.use();
-        voxCS.setIVec3("u_GridSize", gridSize);
-        voxCS.setVec3("u_BoundsMin", boundsMin);
-        voxCS.setFloat("u_VoxelSize", voxelSize);
+        voxCS.setIVec3("u_GridSize", domain.gridSize);
+        voxCS.setVec3("u_BoundsMin", domain.boundsMin);
+        voxCS.setFloat("u_VoxelSize", domain.voxelSize);
         voxCS.setInt("u_TriCount", (int)faces.size());
 
         voxCS.dispatch((int)faces.size());
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
         // Count filled voxels for debug
-        std::vector<int> data = staticVoxels.download<int>(totalVoxels);
+        std::vector<int> data = staticVoxels.download<int>(domain.totalVoxels);
         int filled = 0;
         for (int v : data) if (v != 0) filled++;
         std::cout << "Voxelizer: " << filled << " filled voxels" << std::endl;
@@ -132,54 +135,81 @@ public:
         return true;
     }
 
-    // Generate a procedural test scene: a room with some interior walls
-    void generateTestScene(float voxSize = 0.15f, int gridDim = 64) {
-        voxelSize = voxSize;
-        gridSize = glm::ivec3(gridDim);
-        totalVoxels = gridDim * gridDim * gridDim;
+    // Generate a procedural test scene: a wide arena with interior obstacles.
+    // Outer shell uses voxel type 2 (solid but rendered transparent).
+    // Interior walls use voxel type 1 (solid, opaque).
+    void generateTestScene(float voxSize = 0.15f, int gridX = 96, int gridY = 64, int gridZ = 96) {
+        domain.voxelSize = voxSize;
+        domain.gridSize  = glm::ivec3(gridX, gridY, gridZ);
+        domain.totalVoxels = gridX * gridY * gridZ;
 
         // Bounds centered at origin
-        float halfExtent = (gridDim * voxelSize) * 0.5f;
-        boundsMin = glm::vec3(-halfExtent);
-        boundsMax = glm::vec3(halfExtent);
+        domain.boundsMin = glm::vec3(-(gridX * voxSize)*0.5f, -(gridY * voxSize)*0.5f, -(gridZ * voxSize)*0.5f);
+        domain.boundsMax = glm::vec3( (gridX * voxSize)*0.5f,  (gridY * voxSize)*0.5f,  (gridZ * voxSize)*0.5f);
 
-        // Build wall data on CPU
-        std::vector<int> walls(totalVoxels, 0);
+        std::vector<int> walls(domain.totalVoxels, 0);
 
-        auto flat = [&](int x, int y, int z) {
-            return x + y * gridSize.x + z * gridSize.x * gridSize.y;
-        };
+        int NX = gridX, NY = gridY, NZ = gridZ;
 
-        int N = gridDim;
+        for (int z = 0; z < NZ; z++)
+        for (int y = 0; y < NY; y++)
+        for (int x = 0; x < NX; x++) {
+            // --- Outer shell ---
+            // Floor (y==0): type 1 = solid opaque
+            if (y == 0) {
+                walls[domain.flatten(x, y, z)] = 1;
+                continue;
+            }
+            // Side walls (type 2 = solid barrier, rendered invisible)
+            bool isShell = (x == 0 || x == NX-1 || z == 0 || z == NZ-1);
+            if (isShell) {
+                walls[domain.flatten(x, y, z)] = 2;
+                continue;
+            }
 
-        for (int z = 0; z < N; z++)
-        for (int y = 0; y < N; y++)
-        for (int x = 0; x < N; x++) {
-            // Outer box with open top (no ceiling at y == N-1)
-            bool isShell = (x == 0 || x == N-1 || y == 0 || z == 0 || z == N-1);
+            // --- Interior obstacles (type 1 = opaque) ---
 
-            // Interior wall 1: vertical wall at x=N/3, with a doorway
-            bool wall1 = (x == N/3) && !(y < N/3 && z > N/3 && z < 2*N/3);
+            // Long wall along X-axis at z=NZ/3, doorway gap in middle
+            bool wall1 = (z == NZ/3) && (x > NX/6 && x < 5*NX/6)
+                      && !(y < NY/2 && x > 2*NX/5 && x < 3*NX/5);
 
-            // Interior wall 2: vertical wall at x=2*N/3, with a doorway
-            bool wall2 = (x == 2*N/3) && !(y < N/2 && z > N/4 && z < 3*N/4);
+            // Long wall along X-axis at z=2*NZ/3, doorway gap on left side
+            bool wall2 = (z == 2*NZ/3) && (x > NX/6 && x < 5*NX/6)
+                      && !(y < NY/2 && x > NX/5 && x < 2*NX/5);
 
-            // Interior wall 3: horizontal shelf at y=N/2, partial
-            bool wall3 = (y == N/2) && (x > N/4 && x < 3*N/4) && (z > N/4 && z < 3*N/4);
+            // Wall along Z-axis at x=NX/4, partial height, doorway at bottom
+            bool wall3 = (x == NX/4) && (z > NZ/4 && z < 3*NZ/4)
+                      && !(y < NY/3 && z > 5*NZ/12 && z < 7*NZ/12);
 
-            if (isShell || wall1 || wall2 || wall3) {
-                walls[flat(x, y, z)] = 1;
+            // Wall along Z-axis at x=3*NX/4, partial height, doorway at bottom
+            bool wall4 = (x == 3*NX/4) && (z > NZ/4 && z < 3*NZ/4)
+                      && !(y < NY/3 && z > 5*NZ/12 && z < 7*NZ/12);
+
+            // Low horizontal platform / cover in one quadrant
+            bool platform = (y == NY/5) && (x > NX/3 && x < NX/2) && (z > NZ/3 && z < NZ/2);
+
+            // Small bunker box (hollow not needed - just a solid pillar)
+            bool pillar1 = (x >= 2*NX/5 && x <= 2*NX/5+2) && (z >= 2*NZ/5 && z <= 2*NZ/5+2) && (y < NY/3);
+            bool pillar2 = (x >= 3*NX/5 && x <= 3*NX/5+2) && (z >= 3*NZ/5 && z <= 3*NZ/5+2) && (y < NY/3);
+
+            if (wall1 || wall2 || wall3 || wall4 || platform || pillar1 || pillar2) {
+                walls[domain.flatten(x, y, z)] = 1;
             }
         }
 
         // Upload to GPU
-        staticVoxels.allocate(totalVoxels * sizeof(int));
+        staticVoxels.allocate(domain.totalVoxels * sizeof(int));
         staticVoxels.upload(walls);
 
         int filled = 0;
         for (int v : walls) if (v != 0) filled++;
-        std::cout << "Test scene: grid " << N << "x" << N << "x" << N
-                  << " = " << totalVoxels << " voxels, " << filled << " walls" << std::endl;
+
+        std::cout << "Test scene: grid "
+                << domain.gridSize.x << "x"
+                << domain.gridSize.y << "x"
+                << domain.gridSize.z << " = "
+                << domain.totalVoxels << " voxels, "
+                << filled << " walls" << std::endl;
     }
 
     void destroy() {
@@ -188,8 +218,8 @@ public:
 
 private:
     const char* getComputeSource() {
-        return R"(
-#version 430 core
+        return GLSL_VERSION_CORE 
+        R"(
 layout(local_size_x = 64) in;
 
 // Triangle buffer: each triangle is 3 x vec4

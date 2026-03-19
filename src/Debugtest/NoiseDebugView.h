@@ -1,9 +1,9 @@
 #ifndef NOISE_DEBUG_VIEW_H
 #define NOISE_DEBUG_VIEW_H
 
-#include "shader.h"
-#include "Texture3D.h"
-#include "FullscreenQuad.h"
+#include "core/shader.h"
+#include "core/Texture3D.h"
+#include "core/FullscreenQuad.h"
 
 // Draws a 2D slice of the 3D Worley noise volume as a fullscreen quad.
 // Toggle with enabled, adjust sliceZ with Up/Down arrows.

@@ -1,0 +1,78 @@
+#version 430 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(std430, binding = 0) readonly buffer Velocity { vec4 velocity[]; };
+layout(std430, binding = 1) readonly buffer Walls    { int walls[]; };
+layout(std430, binding = 2) writeonly buffer Divergence { float divergence[]; };
+
+uniform ivec3 u_GridSize;
+uniform float u_CellSize;
+
+int flatIdx(ivec3 c)
+{
+    return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
+}
+
+bool inBounds(ivec3 c)
+{
+    return c.x >= 0 && c.y >= 0 && c.z >= 0 &&
+           c.x < u_GridSize.x &&
+           c.y < u_GridSize.y &&
+           c.z < u_GridSize.z;
+}
+
+bool isFluidCell(ivec3 c)
+{
+    if (!inBounds(c))
+        return false;
+
+    return walls[flatIdx(c)] == 0;
+}
+
+vec3 sampleVelocity(ivec3 c)
+{
+    return velocity[flatIdx(c)].xyz;
+}
+
+void main()
+{
+    ivec3 coord = ivec3(gl_GlobalInvocationID);
+
+    if (!inBounds(coord))
+        return;
+
+    int idx = flatIdx(coord);
+
+    if (walls[idx] != 0)
+    {
+        divergence[idx] = 0.0;
+        return;
+    }
+
+    vec3 vC = velocity[idx].xyz;
+
+    ivec3 left  = coord + ivec3(-1,  0,  0);
+    ivec3 right = coord + ivec3( 1,  0,  0);
+    ivec3 down  = coord + ivec3( 0, -1,  0);
+    ivec3 up    = coord + ivec3( 0,  1,  0);
+    ivec3 back  = coord + ivec3( 0,  0, -1);
+    ivec3 front = coord + ivec3( 0,  0,  1);
+
+    // Face-normal fluxes.
+    // If the neighboring cell is solid or out of bounds, enforce zero normal flux.
+    float fluxR = isFluidCell(right) ? 0.5 * (vC.x + sampleVelocity(right).x) : 0.0;
+    float fluxL = isFluidCell(left)  ? 0.5 * (vC.x + sampleVelocity(left ).x) : 0.0;
+
+    float fluxU = isFluidCell(up)    ? 0.5 * (vC.y + sampleVelocity(up   ).y) : 0.0;
+    float fluxD = isFluidCell(down)  ? 0.5 * (vC.y + sampleVelocity(down ).y) : 0.0;
+
+    float fluxF = isFluidCell(front) ? 0.5 * (vC.z + sampleVelocity(front).z) : 0.0;
+    float fluxB = isFluidCell(back)  ? 0.5 * (vC.z + sampleVelocity(back ).z) : 0.0;
+
+    float div = (fluxR - fluxL +
+                 fluxU - fluxD +
+                 fluxF - fluxB) / u_CellSize;
+
+    divergence[idx] = div;
+}

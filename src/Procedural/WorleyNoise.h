@@ -1,8 +1,9 @@
 #ifndef WORLEY_NOISE_H
 #define WORLEY_NOISE_H
 
-#include "ComputeShader.h"
-#include "Texture3D.h"
+#include "core/ComputeShader.h"
+#include "core/Texture3D.h"
+#include "glVersion.h"
 
 class WorleyNoise {
 public:
@@ -13,8 +14,8 @@ public:
         resolution = res;
         texture.create(res, res, res, GL_R16F);
 
-        const char* src = R"(
-#version 430 core
+        const char* src = GLSL_VERSION_CORE 
+        R"(
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 layout(binding = 0, r16f) uniform image3D u_Output;
 
@@ -107,7 +108,7 @@ void main() {
         cs.setFloat("u_Persistence", 0.5f);
         cs.setFloat("u_Speed", 0.05f);
         cs.dispatch(resolution, resolution, resolution);
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
     }
 
     void destroy() {
