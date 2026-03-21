@@ -25,7 +25,7 @@ public:
     Texture2D smokeOut;          // half-res output (RGBA16F)
 
     // Tweakable parameters
-    float densityScale = 2.5f;
+    float densityScale = 12.0f;
     float sigmaS       = 1.0f;  // scattering coefficient
     float sigmaA       = 0.05f; // absorption coefficient (smoke scatters, barely absorbs)
     int   phaseMode    = 0;     // 0 = Henyey-Greenstein, 1 = Rayleigh
