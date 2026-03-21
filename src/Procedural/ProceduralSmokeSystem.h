@@ -23,9 +23,10 @@ public:
 
     // Public setter methods to change the tunable parameters
     void setFloodFillStepsPerFrame(int steps) { floodFillStepsPerFrame_ = steps; }
-    void setFloodFillVelocityInjectStrength(float strength) { floodFillToSmoke_.setVelocityInjectStrength(strength);}
-    void setFloodFillSmokeInjectStrength(float strength) { floodFillToSmoke_.setSmokeDenseInjectStrength(strength);}
-    // Add in other tunable parameters here
+    void setFloodFillVelocityInjectStrength(float strength) { floodFillToSmoke_.setVelocityInjectStrength(strength); }
+    void setFloodFillSmokeInjectStrength(float strength) { floodFillToSmoke_.setSmokeDenseInjectStrength(strength); }
+    // Per-frame density decay applied in AdvectSmoke (0.990-0.999 — lower = faster fade of wisps)
+    void setDensityDecay(float decay, SmokeSolver& solver) { solver.densityDecay = decay; }
 
 private:
     FloodFillToSmoke floodFillToSmoke_;

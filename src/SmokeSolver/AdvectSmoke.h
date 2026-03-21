@@ -13,7 +13,8 @@ public:
                  const SSBOBuffer& srcSmokeDensityBuf,
                  SSBOBuffer& destSmokeDensityBuf,
                  const SSBOBuffer& wallBuf,
-                 float dt);
+                 float dt,
+                 float densityDecay = 1.0f);
 
     void destroy();
 

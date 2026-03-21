@@ -11,11 +11,15 @@ void FloodFillToSmoke::injectSmoke(
         const VoxelDomain& domain,
         const SSBOBuffer& srcSmokeDensityBuf,
         SSBOBuffer& destSmokeDensityBuf,
-        const SSBOBuffer& wallBuf
+        const SSBOBuffer& wallBuf,
+        glm::ivec3 seedCoord,
+        int maxSeedVal,
+        float radiusXZ,
+        float radiusY
     ) {
     // 0 -> flood fill int src
     // 1 -> walls
-    // 2 -> src smoke density 
+    // 2 -> src smoke density
     // 3 -> dest smoke density
     floodFillBuf.bindBase(0);
     wallBuf.bindBase(1);
@@ -25,6 +29,11 @@ void FloodFillToSmoke::injectSmoke(
     smokeFillShader_.use();
     smokeFillShader_.setIVec3("u_GridSize", domain.gridSize);
     smokeFillShader_.setInt("u_FloodFillMaxValue", floodFillMaxValue);
+    smokeFillShader_.setIVec3("u_SeedCoord", seedCoord);
+    smokeFillShader_.setInt("u_MaxSeedVal", maxSeedVal);
+    smokeFillShader_.setFloat("u_RadiusXZ", radiusXZ);
+    smokeFillShader_.setFloat("u_RadiusY", radiusY);
+    smokeFillShader_.setFloat("u_SmokeInjectStrength", smokeDenseInjectStrength_);
 
     smokeFillShader_.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
 
@@ -50,13 +59,16 @@ void FloodFillToSmoke::injectVelocity(
         int floodFillMaxValue,
         const VoxelDomain& domain,
         const glm::ivec3& seedCoord,
+        int maxSeedVal,
+        float radiusXZ,
+        float radiusY,
         const SSBOBuffer& srcVelocityBuf,
         SSBOBuffer& destVelocityBuf,
         const SSBOBuffer& wallBuf
     ) {
     // 0 -> flood fill int src
     // 1 -> walls
-    // 2 -> src velocity  
+    // 2 -> src velocity
     // 3 -> dest velocity
     floodFillBuf.bindBase(0);
     wallBuf.bindBase(1);
@@ -65,7 +77,6 @@ void FloodFillToSmoke::injectVelocity(
 
     velocityFillShader_.use();
     velocityFillShader_.setIVec3("u_GridSize", domain.gridSize);
-    velocityFillShader_.setInt("u_FloodFillMaxValue", floodFillMaxValue);
     velocityFillShader_.setIVec3("u_SeedCoord", seedCoord);
     velocityFillShader_.setFloat("u_InjectStrength", velocityInjectStrength_);
 
@@ -81,6 +92,9 @@ void FloodFillToSmoke::injectAll(
         const SSBOBuffer& srcSmokeDensityBuf,
         SSBOBuffer& destSmokeDensityBuf,
         const glm::ivec3& seedCoord,
+        int maxSeedVal,
+        float radiusXZ,
+        float radiusY,
         const SSBOBuffer& srcVelocityBuf,
         SSBOBuffer& destVelocityBuf,
         const SSBOBuffer& wallBuf
@@ -91,13 +105,20 @@ void FloodFillToSmoke::injectAll(
         domain,
         srcSmokeDensityBuf,
         destSmokeDensityBuf,
-        wallBuf
+        wallBuf,
+        seedCoord,
+        maxSeedVal,
+        radiusXZ,
+        radiusY
     );
     injectVelocity(
         floodFillBuf,
         floodFillMaxValue,
         domain,
         seedCoord,
+        maxSeedVal,
+        radiusXZ,
+        radiusY,
         srcVelocityBuf,
         destVelocityBuf,
         wallBuf

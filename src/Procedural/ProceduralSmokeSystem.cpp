@@ -34,6 +34,9 @@ void ProceduralSmokeSystem::update(
         smoke.getSrcDensity(),
         smoke.getDestDensity(),
         floodFill.seedCoord,
+        floodFill.maxSeedValue,
+        floodFill.radiusXZ,
+        floodFill.radiusY,
         smoke.getSrcVelocity(),
         smoke.getDestVelocity(),
         wallBuf

@@ -15,6 +15,7 @@ static constexpr float DEFAULT_DIFFUSION = 0.001f;
 class SmokeSolver {
 public:
     int pressureIterations = 30;
+    float densityDecay = 0.998f; // per-frame decay applied after advection (0.99-0.999)
 
     void init();
     void step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt);

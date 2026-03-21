@@ -23,7 +23,7 @@ public:
     glm::ivec3 seedCoord    = glm::ivec3(0);
     glm::vec3  seedWorldPos = glm::vec3(0);
 
-    int maxSeedValue = 6;        // ellipsoid Y semi-axis in voxels
+    int maxSeedValue = 12;        // ellipsoid Y semi-axis in voxels
     float elapsedTime = 0.0f;
     float fillDuration = 1.0f;
     bool active = false;
@@ -36,10 +36,10 @@ public:
     // squeeze around wall gaps near the ellipsoid edge.
     float wallDetourFactor = 1.0f;
 
-    // Max value that can be stored in the buffer (used by raymarcher to normalise).
-    // Must match the floodBudget formula: maxSeedValue * maxSemiAxis * sqrt2 * wallDetourFactor
+    // Passed as u_FloodFillMaxValue to injection shaders (kept for compatibility,
+    // but density now uses Euclidean distance so this value is no longer critical).
     int effectiveMaxDensity() const {
-        return (int)(maxSeedValue * glm::max(radiusXZ, radiusY) * 1.4142f * wallDetourFactor) + 1;
+        return maxSeedValue + 1;
     }
 
     void init(int totalVoxels) {
@@ -93,11 +93,15 @@ public:
         int currentSeedVal = (int)(easeIn(t) * maxSeedValue);
         if (currentSeedVal < 1) currentSeedVal = 1;
 
-        // sqrt(2) is the geometric minimum to reach diagonal corners of the ellipsoid
-        // without leaving a diamond artifact. wallDetourFactor is purely extra budget
-        // for navigating around wall gaps -- tune it independently of shape.
-        float maxSemiAxis = glm::max(radiusXZ, radiusY);
-        int floodBudget = glm::max(1, (int)(currentSeedVal * maxSemiAxis * 1.4142f * wallDetourFactor));
+        // The maximum L1 distance to any voxel INSIDE the ellipsoid with semi-axes
+        // (s*radiusXZ, s*radiusY, s*radiusXZ) is sqrt(2*radiusXZ^2 + radiusY^2) * s
+        // (derived via Lagrange multipliers). Using this as the budget guarantees ALL
+        // voxels inside the ellipsoid are BFS-reachable while keeping the budget small
+        // enough that smoke cannot instantly teleport around distant walls.
+        // The +1 covers integer truncation so diagonal surface voxels are never missed.
+        float maxL1InEllipsoid = glm::sqrt(2.0f * radiusXZ * radiusXZ + radiusY * radiusY)
+                                 * (float)currentSeedVal;
+        int floodBudget = glm::max(1, (int)(maxL1InEllipsoid * wallDetourFactor) + 1);
 
         for (int i = 0; i < steps; i++) {
 

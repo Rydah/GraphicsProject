@@ -57,7 +57,8 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
         smoke.getSrcDensity(),
         smoke.getDestDensity(),
         wallBuf,
-        dt
+        dt,
+        densityDecay
     );
     smoke.swapDensity();
     

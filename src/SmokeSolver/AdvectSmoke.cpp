@@ -9,7 +9,8 @@ void AdvectSmoke::iterate(const VoxelDomain& domain,
                              const SSBOBuffer& srcSmokeDensityBuf,
                              SSBOBuffer& destSmokeDensityBuf,
                              const SSBOBuffer& wallBuf,
-                             float dt) {
+                             float dt,
+                             float densityDecay) {
     // 0 -> source velocity
     // 1 -> walls
     // 2 -> source density
@@ -25,6 +26,7 @@ void AdvectSmoke::iterate(const VoxelDomain& domain,
     shader_.setFloat("u_CellSize", domain.voxelSize);
     shader_.setVec3("u_BoundsMin", domain.boundsMin);
     shader_.setFloat("u_Dt", dt);
+    shader_.setFloat("u_DensityDecay", densityDecay);
 
     shader_.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
 
