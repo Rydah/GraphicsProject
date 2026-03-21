@@ -5,7 +5,7 @@
 #include "Voxel/VoxelDomain.h"
 
 constexpr float DEFAULT_VELOCITY_INJECT_STRENGTH = 0.95;
-constexpr float DEFAULT_SMOKEDENSE_INJECT_STRENGTH = 0.5f;
+constexpr float DEFAULT_SMOKEDENSE_INJECT_STRENGTH = 0.75f;
 
 /* Wrapper class for injecting flood-fill-derived source terms into the smoke simulation.
 

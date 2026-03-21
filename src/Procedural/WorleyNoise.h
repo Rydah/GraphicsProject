@@ -59,9 +59,10 @@ float worley(vec3 pos, int cellCount) {
         minDist = min(minDist, dist);
     }
 
-    // Soft falloff: (1 - dist)^2 fills cells more — better contrast for puffs
+    // Linear falloff: fills inter-cell space so values between cells are ~0.3-0.5,
+    // not near-zero. This prevents isolated bright blobs when the remap is applied.
     float v = clamp(1.0 - minDist, 0.0, 1.0);
-    return v * v;
+    return v;
 }
 
 void main() {
@@ -103,7 +104,7 @@ void main() {
         cs.use();
         cs.setFloat("u_Time", time);
         cs.setInt("u_Resolution", resolution);
-        cs.setInt("u_CellCount", 6);
+        cs.setInt("u_CellCount", 4);
         cs.setInt("u_Octaves", 3);
         cs.setFloat("u_Persistence", 0.5f);
         cs.setFloat("u_Speed", 0.05f);
