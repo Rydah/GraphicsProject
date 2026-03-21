@@ -25,16 +25,16 @@ public:
     Texture2D smokeOut;          // half-res output (RGBA16F)
 
     // Tweakable parameters
-    float densityScale = 2.0f;
-    float sigmaS       = 0.8f;  // scattering coefficient
-    float sigmaA       = 0.2f;  // absorption coefficient  (sigmaE = sigmaS + sigmaA = 1.0)
+    float densityScale = 3.0f;
+    float sigmaS       = 1.2f;  // scattering coefficient
+    float sigmaA       = 0.25f;  // absorption coefficient
     int   phaseMode    = 0;     // 0 = Henyey-Greenstein, 1 = Rayleigh
     float gAsymmetry   = 0.4f;  // HG asymmetry; 0=isotropic, 0.4=mild forward scatter
     glm::vec3 lightDir   = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
     glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
     float edgeFadeWidth  = 0.3f;
     float curlStrength   = 1.5f;
-    float noiseStrength  = 0.9f;
+    float noiseStrength  = 0.8f;
 
     void init(int fullWidth, int fullHeight) {
         halfW = fullWidth  / 2;

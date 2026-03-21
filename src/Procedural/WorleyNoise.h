@@ -59,9 +59,9 @@ float worley(vec3 pos, int cellCount) {
         minDist = min(minDist, dist);
     }
 
-    // Invert and sharpen: (1 - dist)^6
+    // Soft falloff: (1 - dist)^2 fills cells more — better contrast for puffs
     float v = clamp(1.0 - minDist, 0.0, 1.0);
-    return v * v * v * v * v * v;
+    return v * v;
 }
 
 void main() {
@@ -103,9 +103,9 @@ void main() {
         cs.use();
         cs.setFloat("u_Time", time);
         cs.setInt("u_Resolution", resolution);
-        cs.setInt("u_CellCount", 4);
-        cs.setInt("u_Octaves", 1);
-        cs.setFloat("u_Persistence", 0.25f);
+        cs.setInt("u_CellCount", 6);
+        cs.setInt("u_Octaves", 3);
+        cs.setFloat("u_Persistence", 0.5f);
         cs.setFloat("u_Speed", 0.05f);
         cs.dispatch(resolution, resolution, resolution);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);

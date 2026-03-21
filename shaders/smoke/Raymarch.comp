@@ -283,47 +283,37 @@ void main() {
         // // rawDensity: 1 at the seed centre, 0 at the combined boundary
         // float rawDensity = 1.0 - combinedDist;
 
-        // Replaced with our simpler sample:
         float baseDensity = sampleSmoke(pos);
         if (baseDensity <= 0.001) {
             t += fineStep;
             continue;
         }
 
-        // [UPDATE] new simple density noising
-        // // Edge zone mask: 1 at outer boundary, 0 in dense core
-        // float edgeMask = 1.0 - smoothstep(0.0, max(u_EdgeFadeWidth, 1e-4), rawDensity);
+        // --- HZD-style Perlin + Worley erosion ---
+        // baseDensity (flood fill) is our smooth "Perlin" base — defines the big blob shape.
+        // Worley noise erodes the surface of that blob into distinct puffs.
+        // Different per-axis speeds prevent the unidirectional drift artifact.
+        vec3 noiseUVW = worldToVolumeUVW(pos)
+                      + vec3(u_Time * 0.025, u_Time * 0.013, u_Time * -0.019);
 
-        // // Animated base UVW for noise lookup
-        // vec3 noiseUVW = worldToVolumeUVW(pos) + vec3(u_Time * 0.04);
+        // Coarse Worley: large rounded puffs (sampled at base frequency)
+        float worleyCoarse = texture(u_NoiseTex, fract(noiseUVW)).r;
+        // Fine Worley: small bumps on the surface of those puffs
+        float worleyFine   = texture(u_NoiseTex, fract(noiseUVW * 2.8 + vec3(0.37, 0.51, 0.29))).r;
 
-        // // Curl-like warp from offset 3D noise lookups, remapped to [-1,1]
-        // vec3 warp = vec3(
-        //     texture(u_NoiseTex, fract(noiseUVW + vec3(0.00, 0.00, 0.00))).r,
-        //     texture(u_NoiseTex, fract(noiseUVW + vec3(0.43, 0.17, 0.00))).r,
-        //     texture(u_NoiseTex, fract(noiseUVW + vec3(0.00, 0.43, 0.17))).r
-        // ) * 2.0 - 1.0;
+        // Combine into one detail signal: coarse dominates, fine adds surface texture
+        float worleyDetail = worleyCoarse * 0.65 + worleyFine * 0.35;
 
-        // vec3 extent = max(u_BoundsMax - u_BoundsMin, vec3(1e-5));
-        // vec3 voxelUVW = vec3(u_VoxelSize) / extent;
-        // vec3 warpedUVW = fract(noiseUVW + warp * edgeMask * u_CurlStrength * voxelUVW);
+        // HZD remap: baseDensity is "Perlin", worleyDetail erodes it.
+        // remap(base, 1 - detail, 1, 0, 1)  =  saturate((base - (1 - detail)) / detail)
+        // Result: dense core (base~1) stays solid; boundary (base~0) gets carved into puffs.
+        float erosion = clamp((baseDensity - (1.0 - worleyDetail)) / max(worleyDetail, 1e-4), 0.0, 1.0);
 
-        // float noiseVal = texture(u_NoiseTex, warpedUVW).r;
+        // NoiseStrength blends between unmodified density and fully eroded density.
+        // At strength=1 the remap fully applies; at 0 it reduces to the plain blob.
+        float shapedDensity = mix(baseDensity, erosion, u_NoiseStrength);
 
-        // // Keep core stable, add noise mostly near boundaries
-        // float density = max(rawDensity, 0.0)
-        //               * mix(1.0, noiseVal, clamp(edgeMask * u_NoiseStrength, 0.0, 1.0))
-        //               * u_DensityScale;
-
-
-        // float density = baseDensity * u_DensityScale;
-        float noiseVal = texture(u_NoiseTex, worldToVolumeUVW(pos) + vec3(u_Time * 0.04)).r;
-
-        // remap to [-1,1], we seemed to have had issues where the noise completely destroyed the smoke
-        noiseVal = noiseVal * 2.0 - 1.0;
-
-        // small perturbation around 1.0
-        float density = baseDensity * (1.0 + noiseVal * u_NoiseStrength * 0.4) * u_DensityScale;
+        float density = shapedDensity * u_DensityScale;
 
 
         if (density > 0.001) {
@@ -335,7 +325,7 @@ void main() {
             // Powder effect: 0 at thin edges, 1 at dense core.
             // lightMult in [1, 2]: edges stay at least 1x lit, dense core up to 2x.
             float powder    = 1.0 - exp(-density * sigmaE * fineStep * 2.0);
-            float lightMult = 1.0 + powder;
+            float lightMult = 1.0 + powder * 4.0;
 
             // Phase function: angular scattering distribution.
             // Multiply by 4*pi so isotropic (g=0) gives 1.0, matching old Li scale.
