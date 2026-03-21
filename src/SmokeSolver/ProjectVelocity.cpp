@@ -8,7 +8,8 @@ void ProjectVelocity::iterate(const VoxelDomain& domain,
                               const SSBOBuffer& pressureBuf,
                               const SSBOBuffer& srcVelocityBuf,
                               SSBOBuffer& destVelocityBuf,
-                              const SSBOBuffer& wallBuf) {
+                              const SSBOBuffer& wallBuf,
+                              float dt) {
 
     // 0 -> pressure, 1 -> walls, 2 -> srcVelocity, 3 -> destVelocity
     pressureBuf.bindBase(0);
@@ -19,6 +20,7 @@ void ProjectVelocity::iterate(const VoxelDomain& domain,
     shader_.use();
     shader_.setIVec3("u_GridSize", domain.gridSize);
     shader_.setFloat("u_CellSize", domain.voxelSize);
+    shader_.setFloat("u_Dt", dt);
 
     shader_.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
 

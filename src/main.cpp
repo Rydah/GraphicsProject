@@ -28,6 +28,7 @@
 
 #include "Procedural/WorleyNoise.h"
 #include "Procedural/FloodFill.h"
+#include "Procedural/ProceduralSmokeSystem.h"
 
 #include "Voxel/Voxelizer.h"
 #include "Voxel/VoxelDebug.h"
@@ -322,32 +323,39 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     SmokeField smoke;
     smoke.init(voxelizer.domain);
 
-    std::vector<glm::vec4> initVel(voxelizer.domain.totalVoxels, glm::vec4(0.0f));
 
-    for (int z = 0; z < voxelizer.domain.gridSize.z; ++z) {
-        for (int y = 0; y < voxelizer.domain.gridSize.y; ++y) {
-            for (int x = 0; x < voxelizer.domain.gridSize.x; ++x) {
-                glm::ivec3 c(x, y, z);
-                int idx = voxelizer.domain.flatten(c);
+    // // --- START DEBUG --- Just to seed the initial velocities for the smoke solver for debugging remove after integration with the floodfill
+    // std::vector<glm::vec4> initVel(voxelizer.domain.totalVoxels, glm::vec4(0.0f));
 
-                // small test region near one corner
-                if (x >= 4 && x <= 8 &&
-                    y >= 1 && y <= 4 &&
-                    z >= 4 && z <= 8) {
-                    initVel[idx] = glm::vec4(1.0f, -2.0f, 1.0f, 0.0f);
-                }
-            }
-        }
-    }
+    // for (int z = 0; z < voxelizer.domain.gridSize.z; ++z) {
+    //     for (int y = 0; y < voxelizer.domain.gridSize.y; ++y) {
+    //         for (int x = 0; x < voxelizer.domain.gridSize.x; ++x) {
+    //             glm::ivec3 c(x, y, z);
+    //             int idx = voxelizer.domain.flatten(c);
 
-    smoke.velocity1.upload(initVel);
-    smoke.velocity2.upload(initVel);
+    //             // small test region near one corner
+    //             if (x >= 4 && x <= 8 &&
+    //                 y >= 1 && y <= 4 &&
+    //                 z >= 4 && z <= 8) {
+    //                 initVel[idx] = glm::vec4(1.0f, -2.0f, 1.0f, 0.0f);
+    //             }
+    //         }
+    //     }
+    // }
+    
+    // smoke.velocity1.upload(initVel);
+    // smoke.velocity2.upload(initVel);
+    // // --- END DEBUG ---
 
     SmokeSolver solver;
     solver.init();
 
+    // --- PSmokeSys ---
+    ProceduralSmokeSystem smokeSystem;
+    smokeSystem.init();
+
     // --- Timing ---
-    float lastFrameTime = 0.0f;
+    float lastFrameTime = (float)glfwGetTime();
 
     // --- Render loop ---
     while (!glfwWindowShouldClose(window))
@@ -379,31 +387,50 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         // --- GPU simulation ---
         worleyNoise.generate(time);
 
-        floodFill.propagate(12,
-                            voxelizer.domain.gridSize,
-                            voxelizer.domain.boundsMin,
-                            voxelizer.domain.voxelSize,
-                            voxelizer.staticVoxels,
-                            dt);
+        // floodFill.propagate(12,
+        //                     voxelizer.domain.gridSize,
+        //                     voxelizer.domain.boundsMin,
+        //                     voxelizer.domain.voxelSize,
+        //                     voxelizer.staticVoxels,
+        //                     dt);
 
-        solver.step(smoke, voxelizer.staticVoxels, dt);
+        // solver.step(smoke, voxelizer.staticVoxels, dt);
+        smokeSystem.update(
+            floodFill,
+            solver,
+            smoke,
+            voxelizer.staticVoxels,
+            voxelizer.domain,
+            dt
+        );
+
 
         // --- Ray march (default ON; toggle with R) ---
         if (g_raymarchEnabled) {
+            // raymarcher.render(
+            //     floodFill.currentBuffer(),
+            //     voxelizer.staticVoxels,
+            //     depthPass.depthTex,
+            //     worleyNoise.texture,
+            //     voxelizer.domain,
+            //     view, proj,
+            //     0.001f, 100.0f,
+            //     floodFill.effectiveMaxDensity(),
+            //     time,
+            //     floodFill.seedWorldPos,
+            //     floodFill.maxSeedValue,
+            //     floodFill.radiusXZ,
+            //     floodFill.radiusY
+            // );
             raymarcher.render(
-                floodFill.currentBuffer(),
+                smoke.getSrcDensity(),
                 voxelizer.staticVoxels,
                 depthPass.depthTex,
                 worleyNoise.texture,
                 voxelizer.domain,
                 view, proj,
                 0.001f, 100.0f,
-                floodFill.effectiveMaxDensity(),
-                time,
-                floodFill.seedWorldPos,
-                floodFill.maxSeedValue,
-                floodFill.radiusXZ,
-                floodFill.radiusY
+                time
             );
         }
 
@@ -459,6 +486,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     raymarcher.destroy();
     solver.destroy();
     smoke.destroy();
+    smokeSystem.destroy();
 
     floodFill.destroy();
     voxelizer.destroy();

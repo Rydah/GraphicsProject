@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SmokeSolver/AdvectSmoke.h"
 #include "SmokeSolver/AdvectVelocity.h"
 #include "SmokeSolver/ComputeDivergence.h"
 #include "SmokeSolver/PressureJacobi.h"
@@ -7,7 +8,7 @@
 #include "core/smokeField.h"
 #include "core/Buffer.h"
 
-static constexpr int DEFAULT_ITER_COUNT = 30;
+static constexpr int DEFAULT_ITER_COUNT = 60;
 static constexpr float DEFAULT_VISCOSITY = 0.001f;
 static constexpr float DEFAULT_DIFFUSION = 0.001f;
 
@@ -21,6 +22,7 @@ public:
 
 private:
     AdvectVelocity advectVelocity_;
+    AdvectSmoke advectSmoke_;
     ComputeDivergence computeDivergence_;
     PressureJacobi pressureJacobi_;
     ProjectVelocity projectVelocity_;

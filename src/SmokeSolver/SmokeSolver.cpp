@@ -1,6 +1,7 @@
 #include "SmokeSolver/SmokeSolver.h"
 
 void SmokeSolver::init() {
+    advectSmoke_.init();
     advectVelocity_.init();
     computeDivergence_.init();
     pressureJacobi_.init();
@@ -44,9 +45,22 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
         smoke.getSrcPressure(),
         smoke.getSrcVelocity(),
         smoke.getDestVelocity(),
-        wallBuf
+        wallBuf,
+        dt
     );
     smoke.swapVelocity();
+
+    // advect smoke (we can actually choose to advect the smoke or velocity first or later as it doesnt matter visually)
+    advectSmoke_.iterate(
+        smoke.domain,
+        smoke.getSrcVelocity(),
+        smoke.getSrcDensity(),
+        smoke.getDestDensity(),
+        wallBuf,
+        dt
+    );
+    smoke.swapDensity();
+    
 
     // advect velocity
     advectVelocity_.iterate(
@@ -57,9 +71,11 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
         dt
     );
     smoke.swapVelocity();
+
 }
 
 void SmokeSolver::destroy() {
+    advectSmoke_.destroy();
     advectVelocity_.destroy();
     computeDivergence_.destroy();
     pressureJacobi_.destroy();

@@ -1,0 +1,134 @@
+#version 430 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// binding 0 -> source velocity
+layout(std430, binding = 0) readonly buffer VelocitySrc {
+    vec4 velocitySrc[];
+};
+
+// binding 1 -> walls
+layout(std430, binding = 1) readonly buffer Walls {
+    int walls[];
+};
+
+// binding 2 -> source smoke density
+layout(std430, binding = 2) readonly buffer SmokeDensitySrc {
+    float smokeDensitySrc[];
+};
+
+// binding 3 -> destination smoke density
+layout(std430, binding = 3) writeonly buffer SmokeDensityDest {
+    float smokeDensityDest[];
+};
+
+uniform ivec3 u_GridSize;
+uniform vec3  u_BoundsMin;
+uniform float u_CellSize;
+uniform float u_Dt;
+
+int flatIdx(ivec3 c)
+{
+    return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
+}
+
+bool inBounds(ivec3 c)
+{
+    return c.x >= 0 && c.y >= 0 && c.z >= 0 &&
+           c.x < u_GridSize.x &&
+           c.y < u_GridSize.y &&
+           c.z < u_GridSize.z;
+}
+
+bool isFluidCell(ivec3 c)
+{
+    if (!inBounds(c))
+        return false;
+
+    return walls[flatIdx(c)] == 0;
+}
+
+vec3 gridToWorldCenter(ivec3 c)
+{
+    return u_BoundsMin + (vec3(c) + 0.5) * u_CellSize;
+}
+
+// Convert world-space position to continuous grid-space coordinates
+// subtract 0.5 because data is stored at cell centers
+vec3 worldToGridFloat(vec3 p)
+{
+    return ((p - u_BoundsMin) / u_CellSize) - vec3(0.5);
+}
+
+float sampleSmokeAtCell(ivec3 c)
+{
+    if (!isFluidCell(c))
+        return 0.0;
+
+    return smokeDensitySrc[flatIdx(c)];
+}
+
+float sampleSmokeTrilinear(vec3 worldPos)
+{
+    vec3 gridPos = worldToGridFloat(worldPos);
+
+    ivec3 c0 = ivec3(floor(gridPos));
+    ivec3 c1 = c0 + ivec3(1);
+
+    vec3 f = fract(gridPos);
+
+    // 8 corner samples
+    float s000 = sampleSmokeAtCell(ivec3(c0.x, c0.y, c0.z));
+    float s100 = sampleSmokeAtCell(ivec3(c1.x, c0.y, c0.z));
+    float s010 = sampleSmokeAtCell(ivec3(c0.x, c1.y, c0.z));
+    float s110 = sampleSmokeAtCell(ivec3(c1.x, c1.y, c0.z));
+
+    float s001 = sampleSmokeAtCell(ivec3(c0.x, c0.y, c1.z));
+    float s101 = sampleSmokeAtCell(ivec3(c1.x, c0.y, c1.z));
+    float s011 = sampleSmokeAtCell(ivec3(c0.x, c1.y, c1.z));
+    float s111 = sampleSmokeAtCell(ivec3(c1.x, c1.y, c1.z));
+
+    // Interpolate along x
+    float s00 = mix(s000, s100, f.x);
+    float s10 = mix(s010, s110, f.x);
+    float s01 = mix(s001, s101, f.x);
+    float s11 = mix(s011, s111, f.x);
+
+    // Interpolate along y
+    float s0 = mix(s00, s10, f.y);
+    float s1 = mix(s01, s11, f.y);
+
+    // Interpolate along z
+    return mix(s0, s1, f.z);
+}
+
+void main()
+{
+    ivec3 coord = ivec3(gl_GlobalInvocationID);
+
+    if (!inBounds(coord))
+        return;
+
+    int idx = flatIdx(coord);
+
+    // keep solid cells empty
+    if (walls[idx] != 0)
+    {
+        smokeDensityDest[idx] = 0.0;
+        return;
+    }
+
+    // current voxel center in world space
+    vec3 worldPos = gridToWorldCenter(coord);
+
+    // current velocity at this voxel
+    vec3 vel = velocitySrc[idx].xyz;
+
+    // semi-Lagrangian backtrace
+    vec3 prevWorldPos = worldPos - vel * u_Dt;
+
+    // trilinear sample previous smoke field
+    float advectedSmoke = sampleSmokeTrilinear(prevWorldPos);
+
+    smokeDensityDest[idx] = advectedSmoke;
+}

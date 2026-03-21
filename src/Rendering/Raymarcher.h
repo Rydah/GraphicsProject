@@ -55,20 +55,30 @@ public:
 
     // Dispatch the ray-march compute shader.
     // Call after flood fill + solver have finished.
+    // void render(const SSBOBuffer& smokeBuf,
+    //             const SSBOBuffer& wallBuf,
+    //             const Texture2D&  depthTex,
+    //             const Texture3D&  noiseTex,
+    //             const VoxelDomain& domain,
+    //             const glm::mat4& view,
+    //             const glm::mat4& proj,
+    //             float zNear, float zFar,
+    //             int maxDensityVal,
+    //             float timeSec,
+    //             glm::vec3 seedWorldPos,
+    //             int maxSeedVal,
+    //             float radiusXZ,
+    //             float radiusY)
+    // {
     void render(const SSBOBuffer& smokeBuf,
-                const SSBOBuffer& wallBuf,
-                const Texture2D&  depthTex,
-                const Texture3D&  noiseTex,
-                const VoxelDomain& domain,
-                const glm::mat4& view,
-                const glm::mat4& proj,
-                float zNear, float zFar,
-                int maxDensityVal,
-                float timeSec,
-                glm::vec3 seedWorldPos,
-                int maxSeedVal,
-                float radiusXZ,
-                float radiusY)
+            const SSBOBuffer& wallBuf,
+            const Texture2D&  depthTex,
+            const Texture3D&  noiseTex,
+            const VoxelDomain& domain,
+            const glm::mat4& view,
+            const glm::mat4& proj,
+            float zNear, float zFar,
+            float timeSec)
     {
         glm::mat4 invView = glm::inverse(view);
         glm::mat4 invProj = glm::inverse(proj);
@@ -96,7 +106,7 @@ public:
         marchCS.setVec3 ("u_BoundsMin",      domain.boundsMin);
         marchCS.setVec3 ("u_BoundsMax",      domain.boundsMax);
         marchCS.setFloat("u_VoxelSize",      domain.voxelSize);
-        marchCS.setInt  ("u_MaxDensityVal",  maxDensityVal);
+        // marchCS.setInt  ("u_MaxDensityVal",  maxDensityVal); No longer used in shader
         marchCS.setFloat("u_DensityScale",   densityScale);
         marchCS.setFloat("u_SigmaE",         sigmaE);
         marchCS.setVec3 ("u_LightDir",       lightDir);
@@ -105,10 +115,10 @@ public:
         marchCS.setFloat("u_EdgeFadeWidth",  edgeFadeWidth);
         marchCS.setFloat("u_CurlStrength",   curlStrength);
         marchCS.setFloat("u_NoiseStrength",  noiseStrength);
-        marchCS.setVec3 ("u_SeedWorldPos",   seedWorldPos);
-        marchCS.setInt  ("u_MaxSeedVal",     maxSeedVal);
-        marchCS.setFloat("u_RadiusXZ",       radiusXZ);
-        marchCS.setFloat("u_RadiusY",        radiusY);
+        // marchCS.setVec3 ("u_SeedWorldPos",   seedWorldPos); No longer used in shader
+        // marchCS.setInt  ("u_MaxSeedVal",     maxSeedVal);
+        // marchCS.setFloat("u_RadiusXZ",       radiusXZ);
+        // marchCS.setFloat("u_RadiusY",        radiusY);
 
         // ivec2 for texture size
         glUniform2i(glGetUniformLocation(marchCS.ID, "u_TexSize"), halfW, halfH);

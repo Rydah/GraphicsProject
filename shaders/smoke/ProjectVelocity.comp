@@ -8,6 +8,7 @@ layout(std430, binding = 3) writeonly buffer VelocityDest { vec4 velocityDest[];
 
 uniform ivec3 u_GridSize;
 uniform float u_CellSize;
+uniform float u_Dt;
 
 int flatIdx(ivec3 c)
 {
@@ -77,9 +78,14 @@ void main()
     float pF = isFluidCell(front) ? pressure[flatIdx(front)] : pC;
 
     vec3 vCurr = sampleVelocityOrZero(coord);
-    vCurr.x -= (pR - pL) * invTwoH;
-    vCurr.y -= (pU - pD) * invTwoH;
-    vCurr.z -= (pF - pB) * invTwoH;
+
+    // expose this as a hyperparameter in PSmokeSys
+    float velDecay = 0.995;
+
+    vCurr.x -= (pR - pL) * invTwoH * u_Dt;
+    vCurr.y -= (pU - pD) * invTwoH * u_Dt;
+    vCurr.z -= (pF - pB) * invTwoH * u_Dt;
+    vCurr *= velDecay;
 
     velocityDest[idx] = vec4(vCurr, 0.0);
 }
