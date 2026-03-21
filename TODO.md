@@ -401,34 +401,54 @@ The cross product `N × omega` is a tangential force that tightens existing vort
 
 ## Frame Render Order (SmokeSystem.cpp)
 
+> **[UPDATED — commit 71a44e9]** The render loop now calls `ProceduralSmokeSystem::update()` instead of separate `floodFill.propagate()` + `solver.step()` calls. The actual per-frame GPU sequence is documented below.
+
 ```
-Each frame:
-1. [CPU]  Update flood-fill radius (easing curve)
-2. [GPU]  CS_FillStep × 1: seed / propagate smoke voxels (runs until radius fully expanded,
-           then disabled — density is carried forward by fluid advection instead)
+Each frame (via ProceduralSmokeSystem::update()):
 
-     ── Fluid simulation (Step 10e) ──
-2b. [GPU]  CS_FluidBuoyancy:    add upward velocity proportional to local smoke density
-2c. [GPU]  CS_FluidVorticity:   vorticity confinement — amplify existing rotation
-2d. [GPU]  CS_FluidDivergence:  compute ∇·V per voxel → divergence scratch buffer
-2e. [GPU]  CS_FluidPressure × 20: Jacobi pressure iterations (ping-pong bindings 6↔7)
-2f. [GPU]  CS_FluidProject:     subtract ∇p from velocity; zero wall-normal components
-2g. [GPU]  CS_FluidAdvectDensity: semi-Lagrangian advect smoke density along velocity
-     ─────────────────────────────────
+  -- Step 1: Expand smoke source region --
+  [GPU]  FloodFill::propagate(stepsPerFrame=15)
+           reads/writes flood fill ping-pong SSBOs; blocked by wall SSBO
 
-3. [GPU]  CS_GenerateNoise: update 128³ Worley noise texture
-4. [GPU]  CS_RayMarchSmoke: ray march → smoke color + alpha textures
-           (reads density from fluid advection output, binding 2)
-5. [GPU]  Pass 1 (if low res): Catmull-Rom upsample to full res
-6. [GPU]  Pass 2: Composite + sharpen → final image
-7. [GPU]  (optional) VisualizeVoxels: draw debug cubes
+  -- Step 2: Inject flood fill into smoke simulation buffers --
+  [GPU]  FloodFillToSmoke.comp  (FloodFillToSmoke::injectSmoke)
+           reads: floodFillSrc (int), walls (int), smokeDensitySrc (float)
+           writes: smokeDensityDest (float)
+           rule:  smokeDensityDest[i] = max(oldSmoke, floodNorm)
+           reason: treats flood fill region as a persistent source — voxels stay full
+  [GPU]  FloodFillToVelocity.comp  (FloodFillToSmoke::injectVelocity)
+           reads: floodFillSrc (int), walls (int), velocitySrc (vec4)
+           writes: velocityDest (vec4)
+           rule:  vel += normalize(coord - seedCoord) * injectStrength * floodNorm
+           reason: drives radial outward expansion, strongest at seed, weaker at edges
+           NOTE: injection is ADDITIVE every frame (continuous emitter model, not one-shot)
+  [CPU]  smoke.swapVelocity(), smoke.swapDensity()
 
-On grenade detonation (one-shot, before first frame):
-   [GPU]  CS_FluidImpulse: inject radial outward velocity burst into velocity ping buffer
+  -- Step 3: Run fluid solver on updated smoke state --
+  [GPU]  SmokeSolver::step():
+    3a. ComputeDivergence   — compute ∇·V per voxel → divergence scratch buffer
+    3b. PressureJacobi × 60  — Jacobi pressure iterations (ping-pong, 60 iters default)
+    3c. ProjectVelocity     — subtract ∇p * dt from velocity; apply velDecay=0.995
+    3d. AdvectSmoke         — semi-Lagrangian density advection along velocity field
+    3e. AdvectVelocity      — semi-Lagrangian velocity self-advection
+
+  GL_SHADER_STORAGE_BARRIER_BIT between each dispatch above.
+
+Then (outside ProceduralSmokeSystem):
+4. [GPU]  WorleyNoise::generate(time)  — update 128³ Worley noise texture
+5. [GPU]  Raymarcher::render(smoke.getSrcDensity(), ...)
+           reads the float density SSBO from step 3d output (not the flood fill int buffer)
+6. [GPU]  (future) Catmull-Rom upsample → full-res
+7. [GPU]  (future) Composite + sharpen → final image
+8. [GPU]  (optional) VisualizeVoxels: draw debug cubes
 ```
+
+> **Still TODO from original plan (not yet in render loop):**
+> - `fluid_buoyancy.comp` — upward force proportional to local smoke density
+> - `fluid_vorticity.comp` — vorticity confinement to preserve swirling detail
+> - One-shot detonation impulse (`fluid_impulse.comp`) — currently replaced by continuous `FloodFillToVelocity`
 
 Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see barrier table above).
-The fluid passes (2b–2g) share bindings 4–8; each dispatch reads one and writes the other of each ping-pong pair.
 
 ---
 
@@ -513,7 +533,10 @@ The fluid passes (2b–2g) share bindings 4–8; each dispatch reads one and wri
 
 ### Phase 3: Rendering
 
-- [ ] **Step 10a — Ray March Core: Beer-Lambert**
+- [x] **Step 10a — Ray March Core: Beer-Lambert** *(implemented; smoke source updated — commit 71a44e9)*
+
+  > **[UPDATED — commit 71a44e9]** The smoke density source was changed from the flood fill `int` buffer to the fluid simulation's `float` density SSBO (`smoke.getSrcDensity()`). The `u_MaxDensityVal` uniform and the `/float(max(u_MaxDensityVal,1))` normalization in `sampleSmoke()` were removed — the float field is already `[0,1]` normalized. The `Raymarcher::render()` signature was simplified: the shape/seed parameters (`seedWorldPos`, `maxSeedVal`, `radiusXZ`, `radiusY`) were removed entirely since smoke shape now comes from the simulation, not an ellipsoid formula.
+
   - `Raymarcher.h`: class with `Texture2D smokeOut` (half-res `GL_RGBA16F`), `ComputeShader marchCS`, and a blit vert+frag shader pair to draw result to screen
   - `raymarch.comp`: `layout(local_size_x=16, local_size_y=16)`, one thread per half-res pixel
   - **Ray setup:** reconstruct ray from camera matrices
@@ -563,7 +586,10 @@ The fluid passes (2b–2g) share bindings 4–8; each dispatch reads one and wri
   - `Raymarcher::blit(fsQuad)` — draws result to screen; toggle with R key in main.cpp
   - **Verify:** Smoke mass visible as grey/white blob; thicker regions correctly darker
 
-- [ ] **Step 10b — Worley Noise Modulation + Domain Warp at Edges**
+- [x] **Step 10b — Worley Noise Modulation + Domain Warp at Edges** *(simplified from original plan — commit 71a44e9)*
+
+  > **[UPDATED — commit 71a44e9]** The original curl-warp approach (three staggered noise lookups → `[-1,1]` warp vector → edge-masked warp → warped sample) was commented out rather than deleted. It is preserved in `Raymarch.comp` for reference. The replacement is a simpler perturbation: `density = baseDensity * (1 + noiseVal * u_NoiseStrength * 0.4) * u_DensityScale`, where `noiseVal` is a single `texture()` lookup remapped to `[-1,1]`. This avoids the earlier issue where full-strength curl warp was destroying the smoke density entirely. The `edgeMask`, `u_EdgeFadeWidth`, `u_CurlStrength` uniforms remain in the shader for future reactivation.
+
   - Bind the existing Worley 128³ `GL_R16F` texture as `sampler3D` (binding 2) in the march shader
   - **Edge-zone mask:** the stored voxel density IS the Euclidean falloff value [0..1];
     use it directly to define the "edge zone" (low density = boundary of smoke):
@@ -660,7 +686,31 @@ The fluid passes (2b–2g) share bindings 4–8; each dispatch reads one and wri
       Rayleigh is useful for comparison and for haze/atmosphere effects
   - **Verify:** Toggle P key changes visible glow direction; HG shows strong rim-light when backlit
 
-- [ ] **Step 10e — Fluid-Driven Dynamic Smoke Flow**
+- [x] **Step 10e — Fluid-Driven Dynamic Smoke Flow** *(partially implemented — commit 71a44e9)*
+
+  > **[IMPLEMENTED]** The core fluid pipeline is now live. See design notes below before reading the original plan — several pieces were implemented differently from the original spec.
+  >
+  > **What was built (commit 71a44e9):**
+  >
+  > - **`AdvectSmoke` / `AdvectSmoke.comp`** — semi-Lagrangian smoke density advection. Added to `SmokeSolver::step()` after `ProjectVelocity`. Each voxel backtraces `worldPos - vel * dt`, trilinearly samples the old density field, and writes the result to the dest buffer. This is the step that makes density *move* with the velocity field.
+  >
+  > - **`FloodFillToSmoke.comp`** — converts the integer flood fill budget field into a normalized `[0,1]` float smoke density source. Uses `max(oldSmoke, floodNorm)` so any voxel the flood fill has reached stays dense (persistent source, not a one-shot seed). Run once per frame before the solver.
+  >
+  > - **`FloodFillToVelocity.comp`** — injects radial outward velocity into every flood-fill-reached voxel. Direction is `normalize(coord - seedCoord)`, magnitude scales with `floodNorm` (strong near seed, weak at frontier). **Design decision:** injection is ADDITIVE every frame (continuous emitter model). This means velocity accumulates in the source region over time, driving sustained expansion. If smoke appears "too explosive", revisit this in `FloodFillToSmoke::injectVelocity()`. The code comment flags this explicitly.
+  >
+  > - **`FloodFillToSmoke` C++ class** (`src/Procedural/FloodFillToSmoke.h/.cpp`) — wraps both shaders. Exposes `injectAll()` which fires smoke injection then velocity injection in sequence, with a `GL_SHADER_STORAGE_BARRIER_BIT` after each. Tunable via `setVelocityInjectStrength()` / `setSmokeDenseInjectStrength()`.
+  >
+  > - **`ProceduralSmokeSystem` C++ class** (`src/Procedural/ProceduralSmokeSystem.h/.cpp`) — top-level orchestrator called once per frame from `main.cpp`. Its `update()` method runs: flood fill propagation → `FloodFillToSmoke::injectAll()` → `SmokeSolver::step()`. Exposes all tunable hyper-parameters (steps-per-frame, inject strengths) as setters. This replaces the separate `floodFill.propagate()` + `solver.step()` calls that previously lived directly in `main.cpp`.
+  >
+  > - **`ProjectVelocity` updated** — now takes `float dt` parameter, scales pressure gradient subtraction by `dt` for frame-rate independence. A `velDecay = 0.995` factor is applied every frame (hardcoded; comment says to expose via `ProceduralSmokeSystem`).
+  >
+  > - **Jacobi pressure iterations doubled** — `DEFAULT_ITER_COUNT` increased from 30 to 60 to improve divergence-free enforcement with the now-active velocity field.
+  >
+  > **Still TODO from original plan:**
+  > - `fluid_buoyancy.comp` — upward lift proportional to local density
+  > - `fluid_vorticity.comp` — vorticity confinement for swirling boundary detail
+  > - True one-shot detonation impulse (currently replaced by continuous FloodFillToVelocity injection)
+  > - Expose `velDecay` and Jacobi iter count as `ProceduralSmokeSystem` setters
 
   The flood fill gives smoke its wall-aware shape, but motion is static. This step hooks the GPU Navier-Stokes pipeline (divergence → Jacobi pressure → velocity projection → advection) into the simulation loop so smoke actively flows outward on detonation, redirects when it hits walls, rises under buoyancy, and retains visible swirling detail.
 
