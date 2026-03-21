@@ -54,6 +54,7 @@ static VelocityDebugView g_velocityDebug;
 static DepthDebugView    g_depthDebug;
 static SceneDepthPass*   g_depthPass = nullptr;
 static bool              g_raymarchEnabled = true;
+static int               g_phaseMode       = 0;    // 0 = HG, 1 = Rayleigh
 static std::vector<int>  g_wallVoxelCache;
 
 // Ray-AABB slab intersection. Returns true on hit with [tEnter, tExit].
@@ -150,6 +151,13 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
         }
 
         std::cout << "Depth debug: " << (g_depthDebug.enabled ? "ON" : "OFF") << "\n";
+    }
+
+    // Phase function toggle: Henyey-Greenstein <-> Rayleigh
+    if (key == GLFW_KEY_P && action == GLFW_PRESS) {
+        g_phaseMode = (g_phaseMode == 0) ? 1 : 0;
+        const char* names[] = { "Henyey-Greenstein", "Rayleigh" };
+        std::cout << "Phase mode: " << names[g_phaseMode] << "\n";
     }
 
 }
@@ -407,6 +415,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
         // --- Ray march (default ON; toggle with R) ---
         if (g_raymarchEnabled) {
+            raymarcher.phaseMode = g_phaseMode;
             // raymarcher.render(
             //     floodFill.currentBuffer(),
             //     voxelizer.staticVoxels,

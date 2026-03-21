@@ -26,7 +26,10 @@ public:
 
     // Tweakable parameters
     float densityScale = 2.0f;
-    float sigmaE       = 1.0f;  // extinction coefficient
+    float sigmaS       = 0.8f;  // scattering coefficient
+    float sigmaA       = 0.2f;  // absorption coefficient  (sigmaE = sigmaS + sigmaA = 1.0)
+    int   phaseMode    = 0;     // 0 = Henyey-Greenstein, 1 = Rayleigh
+    float gAsymmetry   = 0.4f;  // HG asymmetry; 0=isotropic, 0.4=mild forward scatter
     glm::vec3 lightDir   = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
     glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
     float edgeFadeWidth  = 0.3f;
@@ -108,7 +111,10 @@ public:
         marchCS.setFloat("u_VoxelSize",      domain.voxelSize);
         // marchCS.setInt  ("u_MaxDensityVal",  maxDensityVal); No longer used in shader
         marchCS.setFloat("u_DensityScale",   densityScale);
-        marchCS.setFloat("u_SigmaE",         sigmaE);
+        marchCS.setFloat("u_SigmaS",         sigmaS);
+        marchCS.setFloat("u_SigmaA",         sigmaA);
+        marchCS.setInt  ("u_PhaseMode",      phaseMode);
+        marchCS.setFloat("u_G",              glm::clamp(gAsymmetry, -0.999f, 0.999f));
         marchCS.setVec3 ("u_LightDir",       lightDir);
         marchCS.setVec3 ("u_LightColor",     lightColor);
         marchCS.setFloat("u_Time",           timeSec);
