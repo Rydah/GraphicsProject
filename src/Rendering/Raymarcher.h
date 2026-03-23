@@ -110,7 +110,7 @@ public:
         marchCS.setFloat("u_DensityScale",   densityScale);
         marchCS.setFloat("u_SigmaE",         sigmaE);
         marchCS.setVec3 ("u_LightDir",       light.getDirection());
-        marchCS.setVec3 ("u_LightColor",     light.getColor());
+        marchCS.setVec3 ("u_LightColor",     glm::vec3(1.0f, 0.95f, 0.9f)); // smoke always lit with warm white
         marchCS.setFloat("u_Time",           timeSec);
         marchCS.setFloat("u_EdgeFadeWidth",  edgeFadeWidth);
         marchCS.setFloat("u_CurlStrength",   curlStrength);

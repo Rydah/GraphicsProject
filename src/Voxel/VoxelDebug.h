@@ -131,16 +131,17 @@ in float v_Alpha;
 flat in vec3 v_Normal;
 out vec4 FragColor;
 
-uniform vec3 u_LightDir;
+uniform vec3  u_LightDir;
+uniform vec3  u_LightColor;
+uniform float u_Ambient;
 
 void main() {
     if (v_Alive == 0) discard;
 
-    float ambient  = 0.35;
-    float diffuse  = max(dot(v_Normal, u_LightDir), 0.0) * 0.65;
-    float light    = ambient + diffuse;
+    float diffuse    = max(dot(v_Normal, u_LightDir), 0.0) * (1.0 - u_Ambient);
+    vec3  lighting   = u_Ambient * vec3(1.0) + diffuse * u_LightColor;
 
-    FragColor = vec4(v_Color * light, v_Alpha);
+    FragColor = vec4(v_Color * lighting, v_Alpha);
 }
 )";
 
@@ -162,7 +163,9 @@ void main() {
         debugShader.setIVec3("u_GridSize", gridSize);
         debugShader.setVec3("u_BoundsMin", boundsMin);
         debugShader.setFloat("u_VoxelSize", voxelSize);
-        debugShader.setVec3("u_LightDir", light.getDirection());
+        debugShader.setVec3("u_LightDir",   light.getDirection());
+        debugShader.setVec3("u_LightColor", light.getColor());
+        debugShader.setFloat("u_Ambient",   light.ambientStrength);
         debugShader.setInt("u_Mode", 0);
 
         glBindVertexArray(cubeVAO);
@@ -188,7 +191,9 @@ void main() {
         debugShader.setIVec3("u_GridSize", gridSize);
         debugShader.setVec3("u_BoundsMin", boundsMin);
         debugShader.setFloat("u_VoxelSize", voxelSize);
-        debugShader.setVec3("u_LightDir", light.getDirection());
+        debugShader.setVec3("u_LightDir",   light.getDirection());
+        debugShader.setVec3("u_LightColor", light.getColor());
+        debugShader.setFloat("u_Ambient",   light.ambientStrength);
 
         // Pass 1: opaque walls — depth writes ON so smoke tests against them
         glEnable(GL_BLEND);

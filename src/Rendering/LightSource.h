@@ -14,22 +14,48 @@
 // configurable radius, height, and angular speed.
 class LightSource {
 public:
-    glm::vec3 position  = glm::vec3(5.0f, 10.0f, 3.0f);
-    glm::vec3 color     = glm::vec3(1.0f, 0.95f, 0.9f);
-    float     intensity = 1.0f;
+    glm::vec3 color          = glm::vec3(1.0f, 0.95f, 0.9f);
+    float     intensity      = 1.0f;
+    float     ambientStrength = 0.35f;
+
+    // Spherical angles — primary representation, position is derived from these.
+    float azimuth   = 30.0f;   // degrees, rotation around Y
+    float elevation = 60.0f;   // degrees, angle above horizon
+    float sunDist   = 15.0f;   // world-space radius (affects drag scale)
 
     // Orbit settings
     bool  orbitEnabled = false;
-    float orbitRadius  = 10.0f;
-    float orbitHeight  = 8.0f;
-    float orbitSpeed   = 0.4f;   // radians per second
+    float orbitSpeed   = 0.4f;  // radians per second
+
+    // World position — rebuilt from azimuth/elevation by rebuildPosition().
+    // Also writable directly (e.g. mouse drag); call syncAngles() afterward.
+    glm::vec3 position = glm::vec3(5.0f, 10.0f, 3.0f);
+
+    LightSource() { rebuildPosition(); }
+
+    // Recompute position from azimuth/elevation/sunDist.
+    void rebuildPosition() {
+        float az = glm::radians(azimuth);
+        float el = glm::radians(elevation);
+        position.x = sunDist * std::cos(el) * std::sin(az);
+        position.y = sunDist * std::sin(el);
+        position.z = sunDist * std::cos(el) * std::cos(az);
+    }
+
+    // Recompute azimuth/elevation from current position (call after mouse drag).
+    void syncAngles() {
+        float r   = glm::length(position);
+        if (r < 1e-4f) return;
+        sunDist   = r;
+        elevation = glm::degrees(std::asin(position.y / r));
+        azimuth   = glm::degrees(std::atan2(position.x, position.z));
+    }
 
     void update(float dt) {
         if (!orbitEnabled) return;
         orbitAngle_ += orbitSpeed * dt;
-        position.x = orbitRadius * std::cos(orbitAngle_);
-        position.z = orbitRadius * std::sin(orbitAngle_);
-        position.y = orbitHeight;
+        azimuth = glm::degrees(orbitAngle_);
+        rebuildPosition();
     }
 
     // Normalized direction FROM the scene TOWARD the light (sun-style).

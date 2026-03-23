@@ -832,16 +832,11 @@ Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see b
   > - Scroll-to-adjust-speed multiplier
 
   **Part B — Dear ImGui integration**
-  - Add ImGui source files to CMake: `imgui.cpp`, `imgui_draw.cpp`, `imgui_tables.cpp`, `imgui_widgets.cpp`, `backends/imgui_impl_glfw.cpp`, `backends/imgui_impl_opengl3.cpp`
-  - Init in `main.cpp` after GLAD + window creation:
-    ```cpp
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 430");
-    ```
-  - Each frame: call `ImGui_ImplOpenGL3_NewFrame()` + `ImGui_ImplGlfw_NewFrame()` + `ImGui::NewFrame()` before scene render, then `ImGui::Render()` + `ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData())` after
-  - When mouse is captured for camera, call `ImGui::GetIO().WantCaptureMouse` to block ImGui from stealing clicks
+  > **[IMPLEMENTED]** ImGui v1.92.6 integrated.
+  > - Core sources (`imgui.cpp`, `imgui_draw.cpp`, `imgui_tables.cpp`, `imgui_widgets.cpp`) and most backends compiled from `includes/imgui/` (excluded from git — teammates clone separately per README).
+  > - All imgui backend files used directly from `includes/imgui/backends/` — no modifications. Old bundled `includes/GLFW/` (v3.0.4) removed; system GLFW 3.3.10 now used everywhere, which resolved the original `LastMouseCursor` compile error.
+  > - Init/shutdown and per-frame NewFrame/Render calls wired into `main.cpp`.
+  > - `ImGui::GetIO().WantCaptureMouse` checked to prevent camera stealing clicks when over UI.
 
   **Part C — Parameter sliders (single `ImGui::Begin("Smoke Grenade")` window)**
 
@@ -876,14 +871,14 @@ Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see b
 
   *Lighting*
 
-  > **[PARTIALLY IMPLEMENTED]** `LightSource` class (`src/Rendering/LightSource.h`) is live. Holds `position`, `color`, `intensity`; computes `getDirection()` = `normalize(position)` for shaders. Passed to `Raymarcher::render()` and `VoxelDebug::draw/drawWithSmoke()` — both now use `u_LightDir` uniform instead of hardcoded values. Mouse drag controls (`L + drag` = XZ, `L + scroll` = Y) implemented via ray-plane unproject in `cursor_pos_callback`. Visual marker (3-layer point sprite: halo/glow/core) rendered each frame via `LightSource::drawMarker()`. Orbit animation available but off by default (`orbitEnabled = false`).
-  >
-  > **Still TODO for lighting UI:**
-
-  - `ImGui::SliderFloat("Light Azimuth", &lightAzimuth, 0, 360)` + `ImGui::SliderFloat("Light Elevation", &lightElevation, 5, 85)` — rebuild `u_LightDir` from spherical coords each frame; or expose `g_light.position` directly with a 3-axis drag widget
-  - `ImGui::ColorEdit3("Light Color", &u_LightColor[0])` — tint the light; try warm orange for sunset or cool blue for night scenes
-  - `ImGui::SliderFloat("Ambient", &u_AmbientStrength, 0.0, 0.5)` — base illumination inside the cloud so deeply shadowed regions aren't pitch black
-  - `ImGui::Checkbox("Orbit", &g_light.orbitEnabled)` + `ImGui::SliderFloat("Orbit Speed", &g_light.orbitSpeed, 0.1, 3.0)`
+  > **[IMPLEMENTED]** Full `LightSource` class (`src/Rendering/LightSource.h`) with ImGui panel ("Light Source" window, 300px wide):
+  > - **Azimuth / Elevation sliders** — spherical coordinate control; `rebuildPosition()` converts to XYZ each frame. `syncAngles()` called after mouse drag to keep sliders in sync.
+  > - **Day ↔ Night slider** — blends noon (warm white) → sunset (orange) → night (cool blue) across `[0, 1]`. Tints wall/geometry lighting via `u_LightColor` in VoxelDebug shader. Smoke raymarcher intentionally kept at fixed warm white (Henyey-Greenstein not yet implemented — proper in-scattering tint deferred to Step 10c/d).
+  > - **Intensity slider** — `[0, 3]`, multiplied into `getColor()`.
+  > - **Ambient slider** — `[0, 0.8]`; `u_Ambient` uniform wired into VoxelDebug fragment shader replacing hardcoded `0.35`. Controls base illumination on surfaces facing away from the light.
+  > - **Orbit checkbox + speed slider** — checkbox toggles `orbitEnabled`; speed slider shown only when orbit is on.
+  > - **Mouse drag** — `L + left-drag` moves light in world XZ via ray-plane unproject (exact cursor tracking). `L + scroll` adjusts Y height.
+  > - **Visual marker** — 3-layer point sprite (halo/glow/core) always rendered at light position.
 
   - **Verify:** Drag HG g from -1 → +1 while looking toward the light — the bright lobe should visibly swing from backlit rim to front-facing; drag Buoyancy to 3 and watch smoke curl toward the ceiling
 

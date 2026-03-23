@@ -10,6 +10,11 @@
 #include <iostream>
 #include <vector>
 
+// --- ImGui ---
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+
 // --- Project headers ---
 #include "Debugtest/GLDebug.h"            // enableGLDebug(), printGPUInfo()
 #include "camera/OrbitCamera.h"           // OrbitCamera struct
@@ -262,6 +267,7 @@ static void cursor_pos_callback(GLFWwindow* window, double x, double y) {
                 g_light.position.x = hit.x;
                 g_light.position.z = hit.z;
                 g_light.orbitEnabled = false;
+                g_light.syncAngles();   // keep ImGui sliders in sync
                 std::cout << "[Light] pos=("
                           << g_light.position.x << ", "
                           << g_light.position.y << ", "
@@ -278,6 +284,7 @@ static void scroll_callback(GLFWwindow* window, double, double dy) {
     if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) {
         g_light.position.y += (float)dy * 0.2f;
         g_light.orbitEnabled = false;
+        g_light.syncAngles();
         std::cout << "[Light] pos=("
                   << g_light.position.x << ", "
                   << g_light.position.y << ", "
@@ -332,6 +339,13 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
     // --- Startup self-tests ---
     SelfTests::runAllTests();
+
+    // --- ImGui init ---
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 430");
 
     glEnable(GL_DEPTH_TEST);
 
@@ -554,6 +568,60 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         // Draw light marker on top of everything
         g_light.drawMarker(view, proj);
 
+        // --- ImGui panel ---
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Light Source");
+
+        // --- Direction ---
+        bool changed = false;
+        changed |= ImGui::SliderFloat("Azimuth",   &g_light.azimuth,   0.f,   360.f);
+        changed |= ImGui::SliderFloat("Elevation", &g_light.elevation, 5.f,    85.f);
+        if (changed) g_light.rebuildPosition();
+
+        ImGui::Separator();
+
+        // ImGui::ColorEdit3("Color", &g_light.color.x);
+        // --- Time of Day ---
+        static float timeOfDay = 0.0f;  // 0 = noon, 0.5 = sunset, 1 = night
+        ImGui::Text("Day");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Night").x - ImGui::GetStyle().ItemSpacing.x);
+        if (ImGui::SliderFloat("##tod", &timeOfDay, 0.0f, 1.0f)) {
+            const glm::vec3 noon   = glm::vec3(1.00f, 0.95f, 0.90f);
+            const glm::vec3 sunset = glm::vec3(1.00f, 0.45f, 0.10f);
+            const glm::vec3 night  = glm::vec3(0.25f, 0.35f, 0.80f);
+            if (timeOfDay < 0.5f)
+                g_light.color = glm::mix(noon,   sunset, timeOfDay * 2.0f);
+            else
+                g_light.color = glm::mix(sunset, night,  (timeOfDay - 0.5f) * 2.0f);
+        }
+        ImGui::SameLine();
+        ImGui::Text("Night");
+
+        ImGui::SliderFloat("Intensity", &g_light.intensity, 0.f, 3.f);
+
+        ImGui::Separator();
+
+        // --- Ambient ---
+        ImGui::SliderFloat("Ambient", &g_light.ambientStrength, 0.f, 0.8f);
+
+        ImGui::Separator();
+
+        // --- Orbit ---
+        ImGui::Checkbox("Orbit", &g_light.orbitEnabled);
+        if (g_light.orbitEnabled) {
+            ImGui::SliderFloat("Orbit Speed", &g_light.orbitSpeed, 0.05f, 3.0f);
+        }
+
+        ImGui::End();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
         glfwSwapBuffers(window);
     }
 
@@ -577,6 +645,10 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     g_noiseView.destroy();
     g_velocityDebug.destroy();
     g_depthDebug.destroy();
+
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
 
     glfwTerminate();
     return 0;

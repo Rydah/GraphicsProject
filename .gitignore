@@ -25,3 +25,9 @@ build/
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
+
+# ImGui — clone separately: git clone https://github.com/ocornut/imgui.git includes/imgui
+includes/imgui/
+
+# ImGui auto-saved UI layout — local only
+imgui.ini

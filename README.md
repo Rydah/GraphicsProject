@@ -21,6 +21,19 @@ Unity source: [GarrettGunnell/CS2-Smoke-Grenades](https://github.com/GarrettGunn
 
 ---
 
+## Setup
+
+### Dependencies
+ImGui is not included in the repo — clone it before building:
+```bash
+git clone https://github.com/ocornut/imgui.git includes/imgui
+cd includes/imgui && git checkout v1.92.6
+```
+
+> All imgui files are used directly from the clone — no modifications needed.
+
+---
+
 ## Build
 
 Open `Graphics Project.sln` in **Visual Studio 2022** and build (`Ctrl+Shift+B`).
