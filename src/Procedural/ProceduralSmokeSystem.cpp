@@ -36,7 +36,8 @@ void ProceduralSmokeSystem::update(
         floodFill.seedCoord,
         smoke.getSrcVelocity(),
         smoke.getDestVelocity(),
-        wallBuf
+        wallBuf,
+        floodFill.elapsedTime
     );
     smoke.swapVelocity();
     smoke.swapDensity();

@@ -1,27 +1,29 @@
 #version 430 core
 
 //---------------------------------------------------------------------
-// Volumetric Ray Marcher — Step 10a (Beer-Lambert core)
+// Volumetric Ray Marcher — Beer-Lambert + single scattering + shadows
 //
 // One thread per half-res output pixel.
-// Reads:  smoke density SSBO (int, 0..u_MaxDensityVal)
-//         wall SSBO (int, 1=wall 0=empty)
-//         scene depth texture (sampler2D)
-// Writes: RGBA16F image  (RGB = accumulated scattered light, A = transmittance)
+// Reads:  smoke density SSBO
+//         wall SSBO
+//         scene depth texture
+// Writes: RGBA16F image
+//         RGB = accumulated scattered light
+//         A   = transmittance
 //---------------------------------------------------------------------
 layout(local_size_x = 16, local_size_y = 16) in;
 
 // Output smoke image (half-res)
 layout(binding = 0, rgba16f) writeonly uniform image2D u_Output;
 
-// Scene depth from depth-only FBO (full-res, but we sample it)
+// Scene depth + noise
 uniform sampler2D u_DepthTex;
 uniform sampler3D u_NoiseTex;
 
-// Smoke density SSBO (int per voxel, 0 = empty, up to u_MaxDensityVal) (changed to float buffer as we are now using smokefeild's density)
+// Smoke density SSBO
 layout(std430, binding = 0) readonly buffer SmokeBuf { float smokeDensity[]; };
 
-// Wall SSBO (int per voxel, 1 = solid wall)
+// Wall SSBO
 layout(std430, binding = 1) readonly buffer WallBuf  { int walls[]; };
 
 // Camera
@@ -35,29 +37,23 @@ uniform ivec3 u_GridSize;
 uniform vec3  u_BoundsMin;
 uniform vec3  u_BoundsMax;
 uniform float u_VoxelSize;
-// // [UPDATE] we should no longer need to use this
-// uniform int   u_MaxDensityVal;     // e.g. 64 for flood fill
 
 // Ray march parameters
-uniform float u_DensityScale;      // overall density multiplier  (default ~2.0)
-uniform float u_SigmaE;            // extinction coefficient      (default ~1.0)
-uniform vec3  u_LightDir;          // normalised world-space light direction
-uniform vec3  u_LightColor;        // light colour (default white)
+uniform float u_DensityScale;
+uniform float u_SigmaS;       // scattering coefficient
+uniform float u_SigmaA;       // absorption coefficient
+uniform float u_PhaseBlend;   // blend between HG and RL
+uniform float u_G;            // HG asymmetry parameter
+uniform vec3  u_LightDir;
+uniform vec3  u_LightColor;
 uniform float u_Time;
 
-// Step 10b: boundary turbulence controls
-uniform float u_EdgeFadeWidth;     // default ~0.3
-uniform float u_CurlStrength;      // default ~1.5
-uniform float u_NoiseStrength;     // default ~0.9
+// Noise / shaping controls
+uniform float u_EdgeFadeWidth;
+uniform float u_CurlStrength;
+uniform float u_NoiseStrength;
 
-// // [UPDATE] We will no longer construct based on floodfill parameters
-// // Ellipsoid shape (matches FloodFill parameters)
-// uniform vec3  u_SeedWorldPos;      // world-space position of the smoke seed
-// uniform int   u_MaxSeedVal;        // ellipsoid Y semi-axis in voxels
-// uniform float u_RadiusXZ;          // horizontal scale relative to Y
-// uniform float u_RadiusY;           // vertical scale (base)
-
-// Texture output size (half-res dimensions)
+// Texture output size
 uniform ivec2 u_TexSize;
 
 //---------------------------------------------------------------------
@@ -71,26 +67,16 @@ bool inBounds(ivec3 c) {
     return all(greaterThanEqual(c, ivec3(0))) && all(lessThan(c, u_GridSize));
 }
 
-// Trilinear sample of integer SSBO, returns normalised density [0,1]
+// Trilinear smoke sample
 float sampleSmoke(vec3 worldPos) {
     vec3 gc = (worldPos - u_BoundsMin) / u_VoxelSize - 0.5;
     ivec3 c0 = ivec3(floor(gc));
     ivec3 c1 = c0 + 1;
     vec3  t  = fract(gc);
 
-    // Clamp to grid
     c0 = clamp(c0, ivec3(0), u_GridSize - 1);
     c1 = clamp(c1, ivec3(0), u_GridSize - 1);
 
-    // 8-corner fetch
-    // float v000 = float(smokeDensity[flatIdx(ivec3(c0.x, c0.y, c0.z))]);
-    // float v100 = float(smokeDensity[flatIdx(ivec3(c1.x, c0.y, c0.z))]);
-    // float v010 = float(smokeDensity[flatIdx(ivec3(c0.x, c1.y, c0.z))]);
-    // float v110 = float(smokeDensity[flatIdx(ivec3(c1.x, c1.y, c0.z))]);
-    // float v001 = float(smokeDensity[flatIdx(ivec3(c0.x, c0.y, c1.z))]);
-    // float v101 = float(smokeDensity[flatIdx(ivec3(c1.x, c0.y, c1.z))]);
-    // float v011 = float(smokeDensity[flatIdx(ivec3(c0.x, c1.y, c1.z))]);
-    // float v111 = float(smokeDensity[flatIdx(ivec3(c1.x, c1.y, c1.z))]);
     float v000 = smokeDensity[flatIdx(ivec3(c0.x, c0.y, c0.z))];
     float v100 = smokeDensity[flatIdx(ivec3(c1.x, c0.y, c0.z))];
     float v010 = smokeDensity[flatIdx(ivec3(c0.x, c1.y, c0.z))];
@@ -100,30 +86,25 @@ float sampleSmoke(vec3 worldPos) {
     float v011 = smokeDensity[flatIdx(ivec3(c0.x, c1.y, c1.z))];
     float v111 = smokeDensity[flatIdx(ivec3(c1.x, c1.y, c1.z))];
 
-    // Trilinear interpolation
     float val = mix(
         mix(mix(v000, v100, t.x), mix(v010, v110, t.x), t.y),
         mix(mix(v001, v101, t.x), mix(v011, v111, t.x), t.y),
         t.z
     );
 
-    // return val / float(max(u_MaxDensityVal, 1));
     return val;
 }
 
-// World position to normalized volume UVW (0..1 inside domain)
 vec3 worldToVolumeUVW(vec3 worldPos) {
     vec3 extent = max(u_BoundsMax - u_BoundsMin, vec3(1e-5));
     return (worldPos - u_BoundsMin) / extent;
 }
 
-// Linearize depth from [0,1] depth buffer value to view-space distance
 float linearizeDepth(float d) {
     float z_ndc = d * 2.0 - 1.0;
     return (2.0 * u_Near * u_Far) / (u_Far + u_Near - z_ndc * (u_Far - u_Near));
 }
 
-// Ray-AABB slab test. Returns (tEnter, tExit). If tExit < tEnter, no hit.
 vec2 rayAABB(vec3 origin, vec3 invDir, vec3 bmin, vec3 bmax) {
     vec3 t1 = (bmin - origin) * invDir;
     vec3 t2 = (bmax - origin) * invDir;
@@ -135,13 +116,50 @@ vec2 rayAABB(vec3 origin, vec3 invDir, vec3 bmin, vec3 bmax) {
 }
 
 //---------------------------------------------------------------------
+// Phase functions
+//---------------------------------------------------------------------
+float phaseHG(float cosT, float g) {
+    float g2    = g * g;
+    float denom = max(1.0 + g2 - 2.0 * g * cosT, 1e-5);
+    return (1.0 - g2) / (4.0 * 3.14159265 * pow(denom, 1.5));
+}
+
+float phaseRayleigh(float cosT) {
+    return (3.0 / (16.0 * 3.14159265)) * (1.0 + cosT * cosT);
+}
+
+//---------------------------------------------------------------------
+// Shadow ray toward light
+//---------------------------------------------------------------------
+float shadowMarch(vec3 worldPos) {
+    float shadowStep = u_VoxelSize;
+    float shadowT    = 1.0;
+    float sigmaE     = u_SigmaS + u_SigmaA;
+    vec3  sPos       = worldPos;
+
+    for (int s = 0; s < 16; s++) {
+        sPos += u_LightDir * shadowStep;
+
+        vec3 gc = (sPos - u_BoundsMin) / u_VoxelSize - 0.5;
+        ivec3 c = ivec3(floor(gc));
+        if (!inBounds(c)) break;
+
+        float sd = sampleSmoke(sPos);
+        shadowT *= exp(-sd * sigmaE * shadowStep);
+
+        if (shadowT < 0.01) break;
+    }
+
+    return shadowT;
+}
+
+//---------------------------------------------------------------------
 // Main
 //---------------------------------------------------------------------
 void main() {
     ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= u_TexSize.x || px.y >= u_TexSize.y) return;
 
-    // Reconstruct ray from camera matrices
     vec2 uv  = (vec2(px) + 0.5) / vec2(u_TexSize);
     vec2 ndc = uv * 2.0 - 1.0;
 
@@ -150,7 +168,6 @@ void main() {
     vec3 rayDir    = normalize((u_InvView * vDir).xyz);
     vec3 rayOrigin = u_InvView[3].xyz;
 
-    // Ray-AABB intersection with the smoke volume
     vec3 invDir = 1.0 / rayDir;
     vec2 tHit   = rayAABB(rayOrigin, invDir, u_BoundsMin, u_BoundsMax);
 
@@ -161,16 +178,14 @@ void main() {
 
     tHit.x = max(tHit.x, 0.0);
 
-    // Depth clipping: clamp tMax to scene depth so smoke stays behind geometry
     vec2 depthUV    = uv;
     float rawDepth  = texture(u_DepthTex, depthUV).r;
     float sceneZ    = linearizeDepth(rawDepth);
-    // Convert linear depth to ray t: approximate using dot product with forward
+
     vec3 camForward = -normalize(u_InvView[2].xyz);
     float cosAngle  = max(dot(rayDir, camForward), 0.001);
     float maxT      = sceneZ / cosAngle;
 
-    // Always clip — linearizeDepth(1.0) returns far plane so sky pixels are safe
     tHit.y = min(tHit.y, maxT);
 
     if (tHit.x >= tHit.y) {
@@ -178,26 +193,26 @@ void main() {
         return;
     }
 
-    // ---- Phase 1: Coarse skip (2x voxelSize steps) ----
+    // ---- Phase 1: coarse skip ----
     float coarseStep = u_VoxelSize * 2.0;
     float fineStep   = u_VoxelSize * 0.5;
     float t = tHit.x;
     bool foundSmoke = false;
     float segmentLen = max(tHit.y - tHit.x, 0.0);
 
-    // Adaptive budget from segment length (with safe caps)
     int maxCoarseSteps = clamp(int(ceil(segmentLen / coarseStep)) + 2, 1, 1024);
 
     for (int i = 0; i < maxCoarseSteps; i++) {
         if (t >= tHit.y) break;
+
         vec3 pos = rayOrigin + rayDir * t;
         float d  = sampleSmoke(pos);
         if (d > 0.002) {
-            // Step back one coarse step to not miss the boundary
             t = max(t - coarseStep, tHit.x);
             foundSmoke = true;
             break;
         }
+
         t += coarseStep;
     }
 
@@ -206,9 +221,11 @@ void main() {
         return;
     }
 
-    // ---- Phase 2: Fine accumulation (Beer-Lambert) ----
+    // ---- Phase 2: fine accumulation ----
     vec3  color         = vec3(0.0);
     float transmittance = 1.0;
+    float sigmaE        = u_SigmaS + u_SigmaA;
+
     int maxFineSteps = clamp(int(ceil(max(tHit.y - t, 0.0) / fineStep)) + 2, 1, 4096);
 
     for (int i = 0; i < maxFineSteps; i++) {
@@ -216,85 +233,92 @@ void main() {
 
         vec3 pos = rayOrigin + rayDir * t;
 
-        // // [UPDATE] We are no longer going to rebuild from scratch
-        // // Skip voxels the flood fill never reached.
-        // float floodVal = sampleSmoke(pos);
-        // if (floodVal <= 0.001) { t += fineStep; continue; }
-
-        // // Euclidean ellipsoid distance [0=centre, 1=surface].
-        // vec3 seedToPos = pos - u_SeedWorldPos;
-        // float invVS = 1.0 / max(u_VoxelSize, 1e-5);
-        // float ex = (seedToPos.x * invVS) / (float(u_MaxSeedVal) * u_RadiusXZ);
-        // float ey = (seedToPos.y * invVS) / (float(u_MaxSeedVal) * u_RadiusY);
-        // float ez = (seedToPos.z * invVS) / (float(u_MaxSeedVal) * u_RadiusXZ);
-        // float ellipDist = sqrt(ex*ex + ey*ey + ez*ez);
-
-        // // Path-based distance: voxels reached via long wall detours (e.g. through
-        // // a doorway) spent most of their flood budget on the path and arrive with
-        // // a low floodVal. Mapping that back to [0,1] naturally suppresses them.
-        // float voxelDist = 1.0 - floodVal;  // 0 at seed, ~1 at barely-reached voxels
-
-        // // Use the worse of the two distances. In open space ellipDist dominates
-        // // (giving a perfect sphere). Doorway leakage is suppressed by voxelDist.
-        // float combinedDist = max(ellipDist, voxelDist);
-        // if (combinedDist >= 1.0) { t += fineStep; continue; }
-
-        // // rawDensity: 1 at the seed centre, 0 at the combined boundary
-        // float rawDensity = 1.0 - combinedDist;
-
-        // Replaced with our simpler sample:
         float baseDensity = sampleSmoke(pos);
-        if (baseDensity <= 0.001) {
+        if (baseDensity <= 0.00001) {
             t += fineStep;
             continue;
         }
 
-        // [UPDATE] new simple density noising
-        // // Edge zone mask: 1 at outer boundary, 0 in dense core
-        // float edgeMask = 1.0 - smoothstep(0.0, max(u_EdgeFadeWidth, 1e-4), rawDensity);
+        // -----------------------------------------------------------------
+        // Low-density-aware spatial warp (your earlier stability idea)
+        // -----------------------------------------------------------------
+        vec3 noiseUVW = fract(worldToVolumeUVW(pos) + vec3(u_Time * 0.04));
+        float noiseMask = smoothstep(0.02, 0.20, baseDensity);
 
-        // // Animated base UVW for noise lookup
-        // vec3 noiseUVW = worldToVolumeUVW(pos) + vec3(u_Time * 0.04);
+        vec3 warp = vec3(
+            texture(u_NoiseTex, fract(noiseUVW + vec3(0.00, 0.00, 0.00))).r,
+            texture(u_NoiseTex, fract(noiseUVW + vec3(0.37, 0.11, 0.23))).r,
+            texture(u_NoiseTex, fract(noiseUVW + vec3(0.19, 0.41, 0.07))).r
+        ) * 2.0 - 1.0;
 
-        // // Curl-like warp from offset 3D noise lookups, remapped to [-1,1]
-        // vec3 warp = vec3(
-        //     texture(u_NoiseTex, fract(noiseUVW + vec3(0.00, 0.00, 0.00))).r,
-        //     texture(u_NoiseTex, fract(noiseUVW + vec3(0.43, 0.17, 0.00))).r,
-        //     texture(u_NoiseTex, fract(noiseUVW + vec3(0.00, 0.43, 0.17))).r
-        // ) * 2.0 - 1.0;
+        vec3 warpedPos = pos + warp * (u_VoxelSize * 0.5 * u_CurlStrength) * noiseMask;
+        float warpedDensity = sampleSmoke(warpedPos);
 
-        // vec3 extent = max(u_BoundsMax - u_BoundsMin, vec3(1e-5));
-        // vec3 voxelUVW = vec3(u_VoxelSize) / extent;
-        // vec3 warpedUVW = fract(noiseUVW + warp * edgeMask * u_CurlStrength * voxelUVW);
+        float warpedBlend = 0.35 * noiseMask;
+        float densityBase = mix(baseDensity, warpedDensity, warpedBlend);
 
-        // float noiseVal = texture(u_NoiseTex, warpedUVW).r;
+        // -----------------------------------------------------------------
+        // Worley erosion shaping 
+        // but masked so weak smoke is not over-eroded
+        // -----------------------------------------------------------------
+        vec3 erosionUVW = worldToVolumeUVW(pos)
+                        + vec3(u_Time * 0.0025, u_Time * 0.0012, u_Time * -0.0018);
 
-        // // Keep core stable, add noise mostly near boundaries
-        // float density = max(rawDensity, 0.0)
-        //               * mix(1.0, noiseVal, clamp(edgeMask * u_NoiseStrength, 0.0, 1.0))
-        //               * u_DensityScale;
+        float worleyCoarse = texture(u_NoiseTex, fract(erosionUVW)).r;
+        float worleyFine   = texture(u_NoiseTex, fract(erosionUVW * 3.0 + vec3(0.37, 0.51, 0.29))).r;
 
+        float worleyBlend = clamp(worleyCoarse * 0.65 + worleyFine * 0.35, 0.0, 1.0);
+        float invWorley   = 1.0 - worleyBlend;
 
-        // float density = baseDensity * u_DensityScale;
-        float noiseVal = texture(u_NoiseTex, worldToVolumeUVW(pos) + vec3(u_Time * 0.04)).r;
+        // Base exponent from user control
+        float baseExponent = max(1.0 / max(u_NoiseStrength, 1e-3), 0.001);
 
-        // remap to [-1,1], we seemed to have had issues where the noise completely destroyed the smoke
+        // Extra thick-smoke boost for harsher breakup
+        float thickMask = smoothstep(0.18, 0.65, densityBase);
+        float erosionExponent = mix(baseExponent, baseExponent * 2.2, thickMask);
+
+        float erosion = pow(invWorley + 0.001, erosionExponent);
+
+        // Weak smoke stays stable, thick smoke gets stronger erosion
+        float erosionMask = smoothstep(0.06, 0.45, densityBase);
+        erosionMask = pow(erosionMask, 0.65);
+
+        float shapedDensity = densityBase * mix(1.0, erosion, erosionMask);
+
+        // -----------------------------------------------------------------
+        // Mild scalar modulation, also density-masked and bounded
+        // -----------------------------------------------------------------
+        float noiseVal = texture(u_NoiseTex, fract(noiseUVW)).r;
         noiseVal = noiseVal * 2.0 - 1.0;
 
-        // small perturbation around 1.0
-        float density = baseDensity * (1.0 + noiseVal * u_NoiseStrength * 0.4) * u_DensityScale;
+        float noiseFactor = 1.0 + noiseVal * u_NoiseStrength * 0.15 * noiseMask;
+        noiseFactor = clamp(noiseFactor, 0.80, 1.20);
 
+        float density = shapedDensity * noiseFactor * u_DensityScale;
+        density = max(density, 0.0);
 
-        if (density > 0.001) {
-            // Simple directional lighting (placeholder — Step 10c adds shadow rays)
-            float NdotL = max(dot(normalize(pos - u_BoundsMin), u_LightDir), 0.0);
-            vec3  Li    = u_LightColor * (0.4 + 0.6 * NdotL);
+        if (density > 0.00001) {
+            float shadowT = shadowMarch(pos);
 
-            // Accumulate scattered light + Beer-Lambert extinction
-            color         += Li * density * transmittance * fineStep;
-            transmittance *= exp(-density * u_SigmaE * fineStep);
+            float cosTheta = dot(rayDir, u_LightDir);
+            float hg = phaseHG(cosTheta, u_G);
+            float ry = phaseRayleigh(cosTheta);
 
-            if (transmittance < 0.01) break;  // early termination
+            float phase = mix(hg, ry, clamp(u_PhaseBlend, 0.0, 1.0));
+
+            // normalize isotropic-ish scale to feel closer to old brightness
+            phase *= 4.0 * 3.14159265;
+
+            float powder    = 1.0 - exp(-density * sigmaE * fineStep * 2.0);
+            float lightMult = 1.0 + powder * 0.5;
+
+            vec3 ambientLight = vec3(0.25, 0.27, 0.30);
+            vec3 Li = u_LightColor * shadowT * lightMult * phase + ambientLight;
+
+            color         += transmittance * u_SigmaS * density * Li * fineStep;
+            transmittance *= exp(-sigmaE * density * fineStep);
+
+            if (transmittance < 0.01) break;
         }
 
         t += fineStep;
