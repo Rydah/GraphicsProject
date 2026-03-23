@@ -6,6 +6,7 @@
 #include "core/shader.h"
 #include "core/Buffer.h"
 #include "glVersion.h"
+#include "Rendering/LightSource.h"
 
 class VoxelDebug {
 public:
@@ -130,13 +131,13 @@ in float v_Alpha;
 flat in vec3 v_Normal;
 out vec4 FragColor;
 
+uniform vec3 u_LightDir;
+
 void main() {
     if (v_Alive == 0) discard;
 
-    // Simple directional light in world space
-    vec3 lightDir = normalize(vec3(0.6, 1.0, 0.5));
     float ambient  = 0.35;
-    float diffuse  = max(dot(v_Normal, lightDir), 0.0) * 0.65;
+    float diffuse  = max(dot(v_Normal, u_LightDir), 0.0) * 0.65;
     float light    = ambient + diffuse;
 
     FragColor = vec4(v_Color * light, v_Alpha);
@@ -148,7 +149,8 @@ void main() {
 
     // Draw walls only (mode 0)
     void draw(const SSBOBuffer& wallBuf, const glm::mat4& view, const glm::mat4& proj,
-              glm::ivec3 gridSize, glm::vec3 boundsMin, float voxelSize) {
+              glm::ivec3 gridSize, glm::vec3 boundsMin, float voxelSize,
+              const LightSource& light) {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -160,6 +162,7 @@ void main() {
         debugShader.setIVec3("u_GridSize", gridSize);
         debugShader.setVec3("u_BoundsMin", boundsMin);
         debugShader.setFloat("u_VoxelSize", voxelSize);
+        debugShader.setVec3("u_LightDir", light.getDirection());
         debugShader.setInt("u_Mode", 0);
 
         glBindVertexArray(cubeVAO);
@@ -172,7 +175,8 @@ void main() {
     // Draw walls + smoke density (mode 1)
     void drawWithSmoke(const SSBOBuffer& wallBuf, const SSBOBuffer& smokeBuf,
                        const glm::mat4& view, const glm::mat4& proj,
-                       glm::ivec3 gridSize, glm::vec3 boundsMin, float voxelSize) {
+                       glm::ivec3 gridSize, glm::vec3 boundsMin, float voxelSize,
+                       const LightSource& light) {
         int total = gridSize.x * gridSize.y * gridSize.z;
 
         wallBuf.bindBase(0);
@@ -184,6 +188,7 @@ void main() {
         debugShader.setIVec3("u_GridSize", gridSize);
         debugShader.setVec3("u_BoundsMin", boundsMin);
         debugShader.setFloat("u_VoxelSize", voxelSize);
+        debugShader.setVec3("u_LightDir", light.getDirection());
 
         // Pass 1: opaque walls — depth writes ON so smoke tests against them
         glEnable(GL_BLEND);

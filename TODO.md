@@ -811,15 +811,25 @@ Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see b
 
 - [ ] **Step 14 — Camera Controls + ImGui Parameter UI**
 
-  **Part A — FPS-style camera (WASD + mouse look)**
-  - Aiming (mouse look) is already done. Add movement to `Camera.cpp`:
-    - `W/S` — move forward/backward along the camera's flat ground plane (ignore pitch so you don't fly)
-    - `A/D` — strafe left/right
-    - `Q/E` or `Space/Ctrl` — move straight up/down in world space
-    - Scroll wheel — multiply move speed (default 5 units/s; scroll up = faster, useful for large scenes)
-  - In `main.cpp` GLFW key callback: pass held-key state to `Camera::update(deltaTime)`; do not use single-press events for movement or it will feel stuttery
-  - Right-click to capture mouse (hide cursor + raw input), right-click again or `Escape` to release — this way the UI remains clickable when not in camera mode
-  - **Verify:** Can smoothly walk through the room, inspect smoke from any angle
+  **Part A — Camera movement** *(WASD implemented — see note below)*
+
+  > **[PARTIALLY IMPLEMENTED]** WASD + Q/E camera movement is live in `main.cpp` render loop (checked via `glfwGetKey` each frame for smooth continuous movement). Movement is relative to camera orientation, flattened to XZ so W/S don't cause unintended vertical drift. Speed scales with `g_camera.dist` so it feels consistent at any zoom level.
+  >
+  > **Current key bindings (no conflicts):**
+  > - `W/S` — move forward/back
+  > - `A/D` — strafe left/right
+  > - `Q/E` — move down/up
+  > - `Left-drag` — orbit (unchanged)
+  > - `Shift + left-drag` — pan target (unchanged)
+  > - `Scroll` — zoom (unchanged)
+  > - `L + left-drag` — move light source in XZ plane (ray-plane unproject)
+  > - `L + scroll` — move light source up/down (Y)
+  > - `N` — noise debug, `V` — velocity debug, `R` — raymarch toggle
+  > - `F` — depth framebuffer debug *(was `D`, changed to avoid conflict with WASD)*
+  >
+  > **Still TODO from original Part A plan:**
+  > - Right-click mouse capture mode (hide cursor + raw input) for look-around; currently left-drag orbits instead of free-look
+  > - Scroll-to-adjust-speed multiplier
 
   **Part B — Dear ImGui integration**
   - Add ImGui source files to CMake: `imgui.cpp`, `imgui_draw.cpp`, `imgui_tables.cpp`, `imgui_widgets.cpp`, `backends/imgui_impl_glfw.cpp`, `backends/imgui_impl_opengl3.cpp`
@@ -865,9 +875,15 @@ Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see b
   - `ImGui::SliderFloat("Impulse Strength", &u_ImpulseStrength, 1.0, 30.0)` — initial explosion velocity; higher = smoke punches outward more aggressively before settling
 
   *Lighting*
-  - `ImGui::SliderFloat("Light Azimuth", &lightAzimuth, 0, 360)` + `ImGui::SliderFloat("Light Elevation", &lightElevation, 5, 85)` — rebuild `u_LightDir` from spherical coords each frame
+
+  > **[PARTIALLY IMPLEMENTED]** `LightSource` class (`src/Rendering/LightSource.h`) is live. Holds `position`, `color`, `intensity`; computes `getDirection()` = `normalize(position)` for shaders. Passed to `Raymarcher::render()` and `VoxelDebug::draw/drawWithSmoke()` — both now use `u_LightDir` uniform instead of hardcoded values. Mouse drag controls (`L + drag` = XZ, `L + scroll` = Y) implemented via ray-plane unproject in `cursor_pos_callback`. Visual marker (3-layer point sprite: halo/glow/core) rendered each frame via `LightSource::drawMarker()`. Orbit animation available but off by default (`orbitEnabled = false`).
+  >
+  > **Still TODO for lighting UI:**
+
+  - `ImGui::SliderFloat("Light Azimuth", &lightAzimuth, 0, 360)` + `ImGui::SliderFloat("Light Elevation", &lightElevation, 5, 85)` — rebuild `u_LightDir` from spherical coords each frame; or expose `g_light.position` directly with a 3-axis drag widget
   - `ImGui::ColorEdit3("Light Color", &u_LightColor[0])` — tint the light; try warm orange for sunset or cool blue for night scenes
   - `ImGui::SliderFloat("Ambient", &u_AmbientStrength, 0.0, 0.5)` — base illumination inside the cloud so deeply shadowed regions aren't pitch black
+  - `ImGui::Checkbox("Orbit", &g_light.orbitEnabled)` + `ImGui::SliderFloat("Orbit Speed", &g_light.orbitSpeed, 0.1, 3.0)`
 
   - **Verify:** Drag HG g from -1 → +1 while looking toward the light — the bright lobe should visibly swing from backlit rim to front-facing; drag Buoyancy to 3 and watch smoke curl toward the ceiling
 

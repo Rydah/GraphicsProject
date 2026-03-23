@@ -11,6 +11,7 @@
 #include "core/FullscreenQuad.h"
 #include "core/shader.h"
 #include "Voxel/VoxelDomain.h"
+#include "Rendering/LightSource.h"
 #include "glVersion.h"
 
 // Volumetric ray marcher — Step 10a (Beer-Lambert core).
@@ -27,8 +28,6 @@ public:
     // Tweakable parameters
     float densityScale = 2.0f;
     float sigmaE       = 1.0f;  // extinction coefficient
-    glm::vec3 lightDir   = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
-    glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
     float edgeFadeWidth  = 0.3f;
     float curlStrength   = 1.5f;
     float noiseStrength  = 0.9f;
@@ -78,7 +77,8 @@ public:
             const glm::mat4& view,
             const glm::mat4& proj,
             float zNear, float zFar,
-            float timeSec)
+            float timeSec,
+            const LightSource& light)
     {
         glm::mat4 invView = glm::inverse(view);
         glm::mat4 invProj = glm::inverse(proj);
@@ -109,8 +109,8 @@ public:
         // marchCS.setInt  ("u_MaxDensityVal",  maxDensityVal); No longer used in shader
         marchCS.setFloat("u_DensityScale",   densityScale);
         marchCS.setFloat("u_SigmaE",         sigmaE);
-        marchCS.setVec3 ("u_LightDir",       lightDir);
-        marchCS.setVec3 ("u_LightColor",     lightColor);
+        marchCS.setVec3 ("u_LightDir",       light.getDirection());
+        marchCS.setVec3 ("u_LightColor",     light.getColor());
         marchCS.setFloat("u_Time",           timeSec);
         marchCS.setFloat("u_EdgeFadeWidth",  edgeFadeWidth);
         marchCS.setFloat("u_CurlStrength",   curlStrength);

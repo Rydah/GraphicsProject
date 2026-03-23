@@ -11,7 +11,10 @@ add_executable(GraphicsProject
     src/main.cpp
     src/glad.c
     src/core/smokeField.cpp
+    src/Procedural/FloodFillToSmoke.cpp
+    src/Procedural/ProceduralSmokeSystem.cpp
     src/SmokeSolver/SmokeSolver.cpp
+    src/SmokeSolver/AdvectSmoke.cpp
     src/SmokeSolver/AdvectVelocity.cpp
     src/SmokeSolver/ComputeDivergence.cpp
     src/SmokeSolver/PressureJacobi.cpp
