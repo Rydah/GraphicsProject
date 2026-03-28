@@ -14,6 +14,7 @@ add_executable(GraphicsProject
     src/Procedural/FloodFillToSmoke.cpp
     src/Procedural/ProceduralSmokeSystem.cpp
     src/SmokeSolver/SmokeSolver.cpp
+    src/SmokeSolver/ApplyForces.cpp
     src/SmokeSolver/AdvectSmoke.cpp
     src/SmokeSolver/AdvectVelocity.cpp
     src/SmokeSolver/ComputeDivergence.cpp

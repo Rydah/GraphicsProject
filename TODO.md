@@ -840,45 +840,49 @@ Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see b
 
   **Part C — Parameter sliders (single `ImGui::Begin("Smoke Grenade")` window)**
 
-  Group into collapsible sections with `ImGui::CollapsingHeader`:
+  > **[IMPLEMENTED]** Single `"Smoke Grenade"` window (`320px` wide, `ImGuiCond_FirstUseEver`). All sections use `ImGui::CollapsingHeader` with `ImGuiTreeNodeFlags_DefaultOpen` except Noise & Edge which is collapsed by default.
 
   *Grenade Controls*
-  - `ImGui::Button("Throw Grenade [Space]")` — same action as Space key; resets simulation and seeds at aim point
-  - `ImGui::Button("Reset")` — clears smoke + velocity field without re-throwing
-  - `ImGui::SliderFloat("Expansion Speed", &floodFillStepsPerFrame, 1, 8)` — how many flood-fill steps run per frame; lower = slower cinematic expand, higher = instant fill
-
-  *Smoke Volume*
-  - `ImGui::SliderFloat("Density Scale", &u_DensityScale, 0.1, 5.0)` — overall opacity; low = wispy, high = opaque wall
-  - `ImGui::SliderFloat("Scattering σ_s", &u_SigmaS, 0.1, 10.0)` — how much light bounces inside the cloud (higher = brighter, whiter smoke)
-  - `ImGui::SliderFloat("Absorption σ_a", &u_SigmaA, 0.0, 5.0)` — how much light is absorbed (higher = darker, denser-looking smoke)
-  - `ImGui::SliderFloat("Dissipation", &u_Dissipation, 0.98, 1.0, "%.4f")` — per-frame density decay from advection; 1.0 = smoke never fades, 0.98 = fades in ~2 s
-
-  *Phase Function (light scattering shape)*
-  - `ImGui::RadioButton("Henyey-Greenstein", &u_PhaseMode, 0)` / `ImGui::RadioButton("Rayleigh", &u_PhaseMode, 1)` — side by side; HG is physically correct for smoke, Rayleigh looks more like haze/fog
-  - `ImGui::SliderFloat("HG Anisotropy g", &u_G, -1.0, 1.0)` — only relevant when HG selected; 0 = uniform glow, 0.4 = forward scatter (bright toward light), negative = backscatter; **this one has the most dramatic visual effect**
-
-  *Noise & Edge Detail*
-  - `ImGui::SliderFloat("Noise Strength", &u_NoiseStrength, 0.0, 1.0)` — how much Worley noise breaks up the smoke boundary; 0 = smooth sphere, 1 = fully fluffy
-  - `ImGui::SliderFloat("Edge Fade Width", &u_EdgeFadeWidth, 0.05, 0.6)` — how wide the noisy transition zone is at the cloud boundary
-  - `ImGui::SliderFloat("Curl Strength", &u_CurlStrength, 0.0, 4.0)` — how much domain warp distorts the edge (higher = more turbulent wisps)
-  - `ImGui::SliderFloat("Noise Speed", &u_NoiseSpeed, 0.0, 0.2)` — animation rate of the Worley texture; 0 = frozen, 0.05 = slow drift, 0.2 = fast boiling
-
-  *Fluid Simulation*
-  - `ImGui::SliderFloat("Buoyancy", &u_Buoyancy, 0.0, 5.0)` — upward lift; 0 = smoke stays flat on the ground, 3+ = smoke rises quickly to ceiling
-  - `ImGui::SliderFloat("Vorticity Scale", &u_VorticityScale, 0.0, 1.0)` — swirling intensity at cloud edges; 0 = smooth diffusion, 0.5+ = visible rolling vortex rings
-  - `ImGui::SliderInt("Pressure Iterations", &u_JacobiIters, 5, 40)` — higher = more accurate divergence-free flow (better wall deflection) at the cost of GPU time; 20 is the default sweet spot
-  - `ImGui::SliderFloat("Impulse Strength", &u_ImpulseStrength, 1.0, 30.0)` — initial explosion velocity; higher = smoke punches outward more aggressively before settling
+  > **[IMPLEMENTED]**
+  > - `ImGui::Button("Throw Grenade")` — same action as Space key; resets simulation and defaults seed at center of scene
+  > - `ImGui::Button("Reset")` — clears smoke + velocity field without re-throwing
+  > - `ImGui::SliderFloat("Expansion Speed", &floodFillStepsPerFrame, 1, 8)` — how many flood-fill steps run per frame; lower = slower cinematic expand, higher = instant fill
 
   *Lighting*
-
-  > **[IMPLEMENTED]** Full `LightSource` class (`src/Rendering/LightSource.h`) with ImGui panel ("Light Source" window, 300px wide):
+  > **[IMPLEMENTED]** Full `LightSource` class (`src/Rendering/LightSource.h`) merged into the Smoke Grenade window:
   > - **Azimuth / Elevation sliders** — spherical coordinate control; `rebuildPosition()` converts to XYZ each frame. `syncAngles()` called after mouse drag to keep sliders in sync.
-  > - **Day ↔ Night slider** — blends noon (warm white) → sunset (orange) → night (cool blue) across `[0, 1]`. Tints wall/geometry lighting via `u_LightColor` in VoxelDebug shader. Smoke raymarcher intentionally kept at fixed warm white (Henyey-Greenstein not yet implemented — proper in-scattering tint deferred to Step 10c/d).
+  > - **Day ↔ Night slider** — `ImGui::Text("Day") + SameLine + SliderFloat("##tod") + SameLine + Text("Night")`; blends noon (warm white `1.0, 0.95, 0.9`) → sunset (orange `1.0, 0.45, 0.1`) → night (cool blue `0.25, 0.35, 0.8`) across `[0, 1]`. Tints wall/geometry lighting via `u_LightColor` in VoxelDebug shader. Light colour now also passed to smoke raymarcher via `light.getColor()` — HG in-scattering implemented so smoke tints correctly now.
   > - **Intensity slider** — `[0, 3]`, multiplied into `getColor()`.
-  > - **Ambient slider** — `[0, 0.8]`; `u_Ambient` uniform wired into VoxelDebug fragment shader replacing hardcoded `0.35`. Controls base illumination on surfaces facing away from the light.
-  > - **Orbit checkbox + speed slider** — checkbox toggles `orbitEnabled`; speed slider shown only when orbit is on.
+  > - **Ambient slider** — `[0, 0.8]`; `u_Ambient` uniform wired into VoxelDebug fragment shader replacing hardcoded `0.35`. Controls base illumination on faces pointing away from light.
+  > - **Orbit checkbox + speed slider** — speed slider only shown when orbit is enabled.
   > - **Mouse drag** — `L + left-drag` moves light in world XZ via ray-plane unproject (exact cursor tracking). `L + scroll` adjusts Y height.
   > - **Visual marker** — 3-layer point sprite (halo/glow/core) always rendered at light position.
+
+  *Smoke Volume*
+  > **[IMPLEMENTED]**
+  > - `ImGui::SliderFloat("Density Scale", &raymarcher.densityScale, 0.1, 10.0)` — overall opacity; low = wispy, high = opaque wall
+  > - `ImGui::SliderFloat("Scattering Ss", &raymarcher.sigmaS, 0.0, 10.0)` — how much light bounces inside the cloud (higher = brighter, whiter smoke)
+  > - `ImGui::SliderFloat("Absorption Sa", &raymarcher.sigmaA, 0.0, 5.0)` — how much light is absorbed (higher = darker, denser-looking smoke)
+  - [ ] `ImGui::SliderFloat("Dissipation", &u_Dissipation, 0.98, 1.0, "%.4f")` — needs `u_Dissipation` added to `AdvectSmoke.comp` and exposed in solver first; 1.0 = smoke never fades, 0.98 = fades in ~2s
+
+  *Phase Function (light scattering shape)*
+  > **[IMPLEMENTED]**
+  > - `ImGui::SliderFloat("HG/Rayleigh Blend", &raymarcher.phaseBlend, 0.0, 1.0)` — 0 = pure Henyey-Greenstein (physically correct for smoke), 1 = pure Rayleigh (haze/fog look)
+  > - `ImGui::SliderFloat("HG Anisotropy g", &raymarcher.g, -1.0, 1.0)` — 0 = uniform glow, 0.4 = forward scatter (bright toward light), negative = backscatter; **most dramatic visual effect**
+
+  *Noise & Edge Detail*
+  > **[IMPLEMENTED]** (collapsed by default)
+  > - `ImGui::SliderFloat("Noise Strength", &raymarcher.noiseStrength, 0.0, 1.0)` — 0 = smooth sphere, 1 = fully fluffy boundary
+  > - `ImGui::SliderFloat("Edge Fade Width", &raymarcher.edgeFadeWidth, 0.05, 0.6)` — width of noisy transition zone at cloud boundary
+  > - `ImGui::SliderFloat("Curl Strength", &raymarcher.curlStrength, 0.0, 4.0)` — domain warp turbulence at edges; higher = more turbulent wisps
+  - [ ] `ImGui::SliderFloat("Noise Speed", &u_NoiseSpeed, 0.0, 0.2)` — needs `u_NoiseSpeed` uniform added to Worley noise system first; 0 = frozen, 0.05 = slow drift, 0.2 = fast boiling
+
+  *Fluid Simulation*
+  - [ ] `ImGui::SliderFloat("Buoyancy", &u_Buoyancy, 0.0, 5.0)` — upward lift; 0 = smoke stays flat on the ground, 3+ = smoke rises quickly to ceiling
+  - [ ] `ImGui::SliderFloat("Vorticity Scale", &u_VorticityScale, 0.0, 1.0)` — swirling intensity at cloud edges; 0 = smooth diffusion, 0.5+ = visible rolling vortex rings
+  - [ ] `ImGui::SliderInt("Pressure Iterations", &u_JacobiIters, 5, 40)` — higher = more accurate divergence-free flow (better wall deflection) at the cost of GPU time; 20 is the default sweet spot
+  - [ ] `ImGui::SliderFloat("Impulse Strength", &u_ImpulseStrength, 1.0, 30.0)` — initial explosion velocity; higher = smoke punches outward more aggressively before settling
+  > Note: Check if Buoyancy/Vorticity/Impulse variables are exposed via `ApplyForces.h` before implementing these sliders.
 
   - **Verify:** Drag HG g from -1 → +1 while looking toward the light — the bright lobe should visibly swing from backlit rim to front-facing; drag Buoyancy to 3 and watch smoke curl toward the ceiling
 

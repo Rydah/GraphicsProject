@@ -99,7 +99,7 @@ public:
         marchCS.setFloat("u_G",            g);
 
         marchCS.setVec3 ("u_LightDir",     light.getDirection());
-        marchCS.setVec3 ("u_LightColor",   glm::vec3(1.0f, 0.95f, 0.9f)); // smoke always lit with warm white
+        marchCS.setVec3 ("u_LightColor",   light.getColor());
         marchCS.setFloat("u_Time",         timeSec);
 
         marchCS.setFloat("u_EdgeFadeWidth", edgeFadeWidth);

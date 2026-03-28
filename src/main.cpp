@@ -573,48 +573,78 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Light Source");
+        ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Smoke Grenade");
 
-        // --- Direction ---
-        bool changed = false;
-        changed |= ImGui::SliderFloat("Azimuth",   &g_light.azimuth,   0.f,   360.f);
-        changed |= ImGui::SliderFloat("Elevation", &g_light.elevation, 5.f,    85.f);
-        if (changed) g_light.rebuildPosition();
-
-        ImGui::Separator();
-
-        // ImGui::ColorEdit3("Color", &g_light.color.x);
-        // --- Time of Day ---
-        static float timeOfDay = 0.0f;  // 0 = noon, 0.5 = sunset, 1 = night
-        ImGui::Text("Day");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Night").x - ImGui::GetStyle().ItemSpacing.x);
-        if (ImGui::SliderFloat("##tod", &timeOfDay, 0.0f, 1.0f)) {
-            const glm::vec3 noon   = glm::vec3(1.00f, 0.95f, 0.90f);
-            const glm::vec3 sunset = glm::vec3(1.00f, 0.45f, 0.10f);
-            const glm::vec3 night  = glm::vec3(0.25f, 0.35f, 0.80f);
-            if (timeOfDay < 0.5f)
-                g_light.color = glm::mix(noon,   sunset, timeOfDay * 2.0f);
-            else
-                g_light.color = glm::mix(sunset, night,  (timeOfDay - 0.5f) * 2.0f);
+        // --- Grenade Controls ---
+        if (ImGui::CollapsingHeader("Grenade Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::Button("Throw Grenade")) {
+                glm::vec3 center = (voxelizer.domain.boundsMin + voxelizer.domain.boundsMax) * 0.5f;
+                floodFill.seed(center, voxelizer.domain.gridSize,
+                               voxelizer.domain.boundsMin, voxelizer.domain.voxelSize);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset")) {
+                floodFill.clear();
+                smoke.clear();
+            }
+            ImGui::TextDisabled("Default seed is at center of the scene. Right-click on surfaces to seed.");
+            static int expansionSpeed = 3;
+            if (ImGui::SliderInt("Expansion Speed", &expansionSpeed, 1, 8))
+                smokeSystem.setFloodFillStepsPerFrame(expansionSpeed);
         }
-        ImGui::SameLine();
-        ImGui::Text("Night");
 
-        ImGui::SliderFloat("Intensity", &g_light.intensity, 0.f, 3.f);
+        // --- Light ---
+        if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+            bool changed = false;
+            changed |= ImGui::SliderFloat("Azimuth",   &g_light.azimuth,   0.f, 360.f);
+            changed |= ImGui::SliderFloat("Elevation", &g_light.elevation, 5.f,  85.f);
+            if (changed) g_light.rebuildPosition();
 
-        ImGui::Separator();
+            static float timeOfDay = 0.0f;
+            ImGui::Text("Day");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Night").x - ImGui::GetStyle().ItemSpacing.x);
+            if (ImGui::SliderFloat("##tod", &timeOfDay, 0.0f, 1.0f)) {
+                const glm::vec3 noon   = glm::vec3(1.00f, 0.95f, 0.90f);
+                const glm::vec3 sunset = glm::vec3(1.00f, 0.45f, 0.10f);
+                const glm::vec3 night  = glm::vec3(0.25f, 0.35f, 0.80f);
+                if (timeOfDay < 0.5f)
+                    g_light.color = glm::mix(noon,   sunset, timeOfDay * 2.0f);
+                else
+                    g_light.color = glm::mix(sunset, night,  (timeOfDay - 0.5f) * 2.0f);
+            }
+            ImGui::SameLine();
+            ImGui::Text("Night");
 
-        // --- Ambient ---
-        ImGui::SliderFloat("Ambient", &g_light.ambientStrength, 0.f, 0.8f);
+            ImGui::SliderFloat("Intensity", &g_light.intensity,       0.f, 3.f);
+            ImGui::SliderFloat("Ambient",   &g_light.ambientStrength, 0.f, 0.8f);
 
-        ImGui::Separator();
+            ImGui::Checkbox("Orbit", &g_light.orbitEnabled);
+            if (g_light.orbitEnabled)
+                ImGui::SliderFloat("Orbit Speed", &g_light.orbitSpeed, 0.05f, 3.0f);
+        }
 
-        // --- Orbit ---
-        ImGui::Checkbox("Orbit", &g_light.orbitEnabled);
-        if (g_light.orbitEnabled) {
-            ImGui::SliderFloat("Orbit Speed", &g_light.orbitSpeed, 0.05f, 3.0f);
+        // --- Smoke Volume ---
+        if (ImGui::CollapsingHeader("Smoke Volume", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::SliderFloat("Density Scale", &raymarcher.densityScale, 0.1f, 10.0f);
+            ImGui::SliderFloat("Scattering Ss", &raymarcher.sigmaS,       0.0f, 10.0f);
+            ImGui::SliderFloat("Absorption Sa", &raymarcher.sigmaA,       0.0f, 5.0f);
+        }
+
+        // --- Phase Function ---
+        if (ImGui::CollapsingHeader("Phase Function", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::SliderFloat("HG/Rayleigh Blend", &raymarcher.phaseBlend, 0.0f, 1.0f);
+            ImGui::SameLine(); ImGui::TextDisabled("(0=HG  1=Rayleigh)");
+            ImGui::SliderFloat("HG Anisotropy g",   &raymarcher.g,         -1.0f, 1.0f);
+        }
+
+        // --- Noise & Edge ---
+        if (ImGui::CollapsingHeader("Noise & Edge")) {
+            ImGui::SliderFloat("Noise Strength", &raymarcher.noiseStrength, 0.0f, 1.0f);
+            ImGui::SliderFloat("Edge Fade Width",&raymarcher.edgeFadeWidth, 0.05f, 0.6f);
+            ImGui::SliderFloat("Curl Strength",  &raymarcher.curlStrength,  0.0f, 4.0f);
         }
 
         ImGui::End();
