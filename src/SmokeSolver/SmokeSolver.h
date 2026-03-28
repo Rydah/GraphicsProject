@@ -5,6 +5,7 @@
 #include "SmokeSolver/ComputeDivergence.h"
 #include "SmokeSolver/PressureJacobi.h"
 #include "SmokeSolver/ProjectVelocity.h"
+#include "SmokeSolver/ApplyForces.h"
 #include "core/smokeField.h"
 #include "core/Buffer.h"
 
@@ -14,13 +15,14 @@ static constexpr float DEFAULT_DIFFUSION = 0.001f;
 
 class SmokeSolver {
 public:
-    int pressureIterations = 30;
+    int pressureIterations = DEFAULT_ITER_COUNT;
 
     void init();
     void step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt);
     void destroy();
 
 private:
+    ApplyForces applyForces_;
     AdvectVelocity advectVelocity_;
     AdvectSmoke advectSmoke_;
     ComputeDivergence computeDivergence_;

@@ -9,6 +9,7 @@ void FloodFillToSmoke::injectSmoke(
         const SSBOBuffer& floodFillBuf,
         int floodFillMaxValue,
         const VoxelDomain& domain,
+        const glm::ivec3& seedCoord,
         const SSBOBuffer& srcSmokeDensityBuf,
         SSBOBuffer& destSmokeDensityBuf,
         const SSBOBuffer& wallBuf
@@ -25,6 +26,8 @@ void FloodFillToSmoke::injectSmoke(
     smokeFillShader_.use();
     smokeFillShader_.setIVec3("u_GridSize", domain.gridSize);
     smokeFillShader_.setInt("u_FloodFillMaxValue", floodFillMaxValue);
+    smokeFillShader_.setIVec3("u_SeedCoord", seedCoord);
+    smokeFillShader_.setFloat("u_InjectStrength", smokeDenseInjectStrength_);
 
     smokeFillShader_.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
 
@@ -83,25 +86,29 @@ void FloodFillToSmoke::injectAll(
         const glm::ivec3& seedCoord,
         const SSBOBuffer& srcVelocityBuf,
         SSBOBuffer& destVelocityBuf,
-        const SSBOBuffer& wallBuf
+        const SSBOBuffer& wallBuf,
+        float elapsedTime
     ) {
     injectSmoke(
         floodFillBuf,
         floodFillMaxValue,
         domain,
+        seedCoord,
         srcSmokeDensityBuf,
         destSmokeDensityBuf,
         wallBuf
     );
-    injectVelocity(
-        floodFillBuf,
-        floodFillMaxValue,
-        domain,
-        seedCoord,
-        srcVelocityBuf,
-        destVelocityBuf,
-        wallBuf
-    );
+    if (elapsedTime < 2.5f) {
+        injectVelocity(
+            floodFillBuf,
+            floodFillMaxValue,
+            domain,
+            seedCoord,
+            srcVelocityBuf,
+            destVelocityBuf,
+            wallBuf
+        );
+    }
 }
 
 void FloodFillToSmoke::destroy() {

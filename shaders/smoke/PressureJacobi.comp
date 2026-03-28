@@ -70,7 +70,7 @@ void main() {
     float div = divergence[idx];
     float h2 = u_CellSize * u_CellSize;
 
-    float weightSOR = 1; // This has issues when changing it anything other than 1... (I think the implementation i have for this is wrong?)
+    float weightSOR = 1.0; // This has issues when changing it anything other than 1... (I think the implementation i have for this is wrong?)
 
     float pNew = (pL + pR + pD + pU + pB + pF - div * h2) / 6.0;
     pressureDest[idx] = pC + (pNew - pC) * weightSOR;

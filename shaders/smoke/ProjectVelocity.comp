@@ -79,13 +79,24 @@ void main()
 
     vec3 vCurr = sampleVelocityOrZero(coord);
 
-    // expose this as a hyperparameter in PSmokeSys
-    float velDecay = 0.995;
+    // expose this as a hyperparameter in SmokeSolver
+    float velDecay = 0.9999;
 
-    vCurr.x -= (pR - pL) * invTwoH * u_Dt;
-    vCurr.y -= (pU - pD) * invTwoH * u_Dt;
-    vCurr.z -= (pF - pB) * invTwoH * u_Dt;
+    vCurr.x -= (pR - pL) * invTwoH;
+    vCurr.y -= (pU - pD) * invTwoH;
+    vCurr.z -= (pF - pB) * invTwoH;
     vCurr *= velDecay;
+
+    // Explicit solid-wall non-penetration clamp:
+    // remove velocity components that point into adjacent solid cells. 
+    if (!isFluidCell(right) && vCurr.x > 0.0) vCurr.x = 0.0;
+    if (!isFluidCell(left)  && vCurr.x < 0.0) vCurr.x = 0.0;
+
+    if (!isFluidCell(up)    && vCurr.y > 0.0) vCurr.y = 0.0;
+    if (!isFluidCell(down)  && vCurr.y < 0.0) vCurr.y = -0.1;
+
+    if (!isFluidCell(front) && vCurr.z > 0.0) vCurr.z = 0.1;
+    if (!isFluidCell(back)  && vCurr.z < 0.0) vCurr.z = 0.0;
 
     velocityDest[idx] = vec4(vCurr, 0.0);
 }

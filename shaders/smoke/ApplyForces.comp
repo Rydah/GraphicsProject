@@ -1,0 +1,73 @@
+#version 430 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// 0 -> source velocity
+layout(std430, binding = 0) readonly buffer VelocitySrc {
+    vec4 velocitySrc[];
+};
+
+// 1 -> destination velocity
+layout(std430, binding = 1) writeonly buffer VelocityDst {
+    vec4 velocityDst[];
+};
+
+// 2 -> smoke density
+layout(std430, binding = 2) readonly buffer SmokeBuf {
+    float smokeDensity[];
+};
+
+// 3 -> walls
+layout(std430, binding = 3) readonly buffer WallBuf {
+    int walls[];
+};
+
+uniform ivec3 u_GridSize;
+uniform float u_Dt;
+
+// Force strengths
+uniform float u_GravityStrength;   // downward acceleration
+uniform float u_BuoyancyStrength;  // upward acceleration per unit smoke density
+
+int flatIdx(ivec3 c) {
+    return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
+}
+
+bool inBounds(ivec3 c) {
+    return c.x >= 0 && c.y >= 0 && c.z >= 0 &&
+           c.x < u_GridSize.x &&
+           c.y < u_GridSize.y &&
+           c.z < u_GridSize.z;
+}
+
+void main() {
+    ivec3 c = ivec3(gl_GlobalInvocationID.xyz);
+    if (!inBounds(c)) return;
+
+    int idx = flatIdx(c);
+
+    // Solid cells: keep velocity zeroed
+    if (walls[idx] != 0) {
+        velocityDst[idx] = vec4(0.0);
+        return;
+    }
+
+    vec3 vel = velocitySrc[idx].xyz;
+    float density = max(smokeDensity[idx], 0.0);
+
+    // Net vertical acceleration:
+    // buoyancy pushes up, gravity pushes down
+    // Using metrics instead of temperature for now
+    float d0 = 0.5;
+    float d1 = 0.9;
+    float mid = 0.5 * (d0 + d1);
+    float halfWidth = 0.5 * (d1 - d0);
+
+    float liftShape = min((density - d0) * (d1 - density),0);
+
+    float ay = u_BuoyancyStrength * liftShape - u_GravityStrength;
+
+    vel.y += ay * u_Dt;
+
+    velocityDst[idx] = vec4(vel, 0.0);
+}

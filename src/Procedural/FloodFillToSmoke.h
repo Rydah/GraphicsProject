@@ -5,7 +5,7 @@
 #include "Voxel/VoxelDomain.h"
 
 constexpr float DEFAULT_VELOCITY_INJECT_STRENGTH = 1.0f;
-constexpr float DEFAULT_SMOKEDENSE_INJECT_STRENGTH = 1.0f; // stubbed for now but we can return to this
+constexpr float DEFAULT_SMOKEDENSE_INJECT_STRENGTH = 0.8f; 
 
 /* Wrapper class for injecting flood-fill-derived source terms into the smoke simulation.
 
@@ -22,6 +22,7 @@ public:
         const SSBOBuffer& floodFillBuf,
         int floodFillMaxValue,
         const VoxelDomain& domain,
+        const glm::ivec3& seedCoord,
         const SSBOBuffer& srcSmokeDensityBuf,
         SSBOBuffer& destSmokeDensityBuf,
         const SSBOBuffer& wallBuf
@@ -44,7 +45,8 @@ public:
         const glm::ivec3& seedCoord,
         const SSBOBuffer& srcVelocityBuf,
         SSBOBuffer& destVelocityBuf,
-        const SSBOBuffer& wallBuf
+        const SSBOBuffer& wallBuf,
+        float elapsedTime
     );
     void destroy();
 

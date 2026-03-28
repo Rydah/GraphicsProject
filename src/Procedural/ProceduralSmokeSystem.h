@@ -25,11 +25,12 @@ public:
     void setFloodFillStepsPerFrame(int steps) { floodFillStepsPerFrame_ = steps; }
     void setFloodFillVelocityInjectStrength(float strength) { floodFillToSmoke_.setVelocityInjectStrength(strength);}
     void setFloodFillSmokeInjectStrength(float strength) { floodFillToSmoke_.setSmokeDenseInjectStrength(strength);}
+
     // Add in other tunable parameters here
 
 private:
     FloodFillToSmoke floodFillToSmoke_;
-    int floodFillStepsPerFrame_ = 15;
+    int floodFillStepsPerFrame_ = 3;
     // we can add in the rest of tunable parameters here e.g
     // smokesolver iters
     // floodfill smoke source dissipation factor

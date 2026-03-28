@@ -129,6 +129,7 @@ void main()
 
     // trilinear sample previous smoke field
     float advectedSmoke = sampleSmokeTrilinear(prevWorldPos);
+    float falloff = 0.9995; // expose this parameter
 
-    smokeDensityDest[idx] = advectedSmoke;
+    smokeDensityDest[idx] = advectedSmoke * falloff;
 }
