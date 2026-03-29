@@ -1,6 +1,7 @@
 #include "SmokeSolver/SmokeSolver.h"
 
 void SmokeSolver::init() {
+    applyForces_.init();
     advectSmoke_.init();
     advectVelocity_.init();
     computeDivergence_.init();
@@ -18,6 +19,26 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
     // smoke.pressure1Curr = true;
     // Comment out when we want to try use the previous values for faster convergence
 
+    // advect velocity
+    advectVelocity_.iterate(
+        smoke.domain,
+        smoke.getSrcVelocity(),
+        smoke.getDestVelocity(),
+        wallBuf,
+        dt
+    );
+    smoke.swapVelocity();
+
+    // apply forces
+    applyForces_.dispatch(
+        smoke.domain,
+        smoke.getSrcVelocity(),
+        smoke.getDestVelocity(),
+        smoke.getSrcDensity(),
+        wallBuf,
+        dt
+    );
+    smoke.swapVelocity();
     
     // compute divergence
     computeDivergence_.run(
@@ -26,9 +47,9 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
         wallBuf,
         smoke.divergence
     );
-    
+
     // pressure solve
-    for (int i=0; i < DEFAULT_ITER_COUNT; i++) {
+    for (int i=0; i < pressureIterations; i++) {
         pressureJacobi_.iterate(
             smoke.domain,
             smoke.getSrcPressure(),
@@ -62,15 +83,6 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
     smoke.swapDensity();
     
 
-    // advect velocity
-    advectVelocity_.iterate(
-        smoke.domain,
-        smoke.getSrcVelocity(),
-        smoke.getDestVelocity(),
-        wallBuf,
-        dt
-    );
-    smoke.swapVelocity();
 
 }
 

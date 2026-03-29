@@ -11,9 +11,10 @@
 #include "core/FullscreenQuad.h"
 #include "core/shader.h"
 #include "Voxel/VoxelDomain.h"
+#include "Rendering/LightSource.h"
 #include "glVersion.h"
 
-// Volumetric ray marcher — Step 10a (Beer-Lambert core).
+// Volumetric ray marcher.
 //
 // Renders smoke at half resolution into an RGBA16F image via compute shader,
 // then blits the result to screen with alpha-based compositing.
@@ -22,16 +23,20 @@
 // Output:   smokeOut texture (RGB = scattered light, A = transmittance)
 class Raymarcher {
 public:
-    Texture2D smokeOut;          // half-res output (RGBA16F)
+    Texture2D smokeOut;
 
     // Tweakable parameters
     float densityScale = 2.0f;
-    float sigmaE       = 1.0f;  // extinction coefficient
-    glm::vec3 lightDir   = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
-    glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
+
+    float sigmaS = 0.3f;   // scattering
+    float sigmaA = 0.5f;   // absorption
+
+    float phaseBlend = 0.5f;    // 0 = Henyey-Greenstein, 1 = Rayleigh
+    float g = 0.20f;
+
     float edgeFadeWidth  = 0.3f;
-    float curlStrength   = 1.5f;
-    float noiseStrength  = 0.9f;
+    float curlStrength   = 1.0f;
+    float noiseStrength  = 0.75f;
 
     void init(int fullWidth, int fullHeight) {
         halfW = fullWidth  / 2;
@@ -53,23 +58,6 @@ public:
         smokeOut.create(halfW, halfH, GL_RGBA16F);
     }
 
-    // Dispatch the ray-march compute shader.
-    // Call after flood fill + solver have finished.
-    // void render(const SSBOBuffer& smokeBuf,
-    //             const SSBOBuffer& wallBuf,
-    //             const Texture2D&  depthTex,
-    //             const Texture3D&  noiseTex,
-    //             const VoxelDomain& domain,
-    //             const glm::mat4& view,
-    //             const glm::mat4& proj,
-    //             float zNear, float zFar,
-    //             int maxDensityVal,
-    //             float timeSec,
-    //             glm::vec3 seedWorldPos,
-    //             int maxSeedVal,
-    //             float radiusXZ,
-    //             float radiusY)
-    // {
     void render(const SSBOBuffer& smokeBuf,
             const SSBOBuffer& wallBuf,
             const Texture2D&  depthTex,
@@ -78,52 +66,48 @@ public:
             const glm::mat4& view,
             const glm::mat4& proj,
             float zNear, float zFar,
-            float timeSec)
+            float timeSec,
+            const LightSource& light)
     {
         glm::mat4 invView = glm::inverse(view);
         glm::mat4 invProj = glm::inverse(proj);
 
-        // Bind output image
         smokeOut.bindImage(0, GL_WRITE_ONLY);
 
-        // Bind depth texture as sampler on unit 0
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, depthTex.ID);
 
-        // Bind Worley noise volume as sampler on unit 1
         noiseTex.bindSampler(1);
 
-        // Bind SSBOs
         smokeBuf.bindBase(0);
         wallBuf.bindBase(1);
 
         marchCS.use();
-        marchCS.setMat4 ("u_InvView",       invView);
-        marchCS.setMat4 ("u_InvProj",       invProj);
-        marchCS.setFloat("u_Near",           zNear);
-        marchCS.setFloat("u_Far",            zFar);
-        marchCS.setIVec3("u_GridSize",       domain.gridSize);
-        marchCS.setVec3 ("u_BoundsMin",      domain.boundsMin);
-        marchCS.setVec3 ("u_BoundsMax",      domain.boundsMax);
-        marchCS.setFloat("u_VoxelSize",      domain.voxelSize);
-        // marchCS.setInt  ("u_MaxDensityVal",  maxDensityVal); No longer used in shader
-        marchCS.setFloat("u_DensityScale",   densityScale);
-        marchCS.setFloat("u_SigmaE",         sigmaE);
-        marchCS.setVec3 ("u_LightDir",       lightDir);
-        marchCS.setVec3 ("u_LightColor",     lightColor);
-        marchCS.setFloat("u_Time",           timeSec);
-        marchCS.setFloat("u_EdgeFadeWidth",  edgeFadeWidth);
-        marchCS.setFloat("u_CurlStrength",   curlStrength);
-        marchCS.setFloat("u_NoiseStrength",  noiseStrength);
-        // marchCS.setVec3 ("u_SeedWorldPos",   seedWorldPos); No longer used in shader
-        // marchCS.setInt  ("u_MaxSeedVal",     maxSeedVal);
-        // marchCS.setFloat("u_RadiusXZ",       radiusXZ);
-        // marchCS.setFloat("u_RadiusY",        radiusY);
+        marchCS.setMat4 ("u_InvView",      invView);
+        marchCS.setMat4 ("u_InvProj",      invProj);
+        marchCS.setFloat("u_Near",         zNear);
+        marchCS.setFloat("u_Far",          zFar);
+        marchCS.setIVec3("u_GridSize",     domain.gridSize);
+        marchCS.setVec3 ("u_BoundsMin",    domain.boundsMin);
+        marchCS.setVec3 ("u_BoundsMax",    domain.boundsMax);
+        marchCS.setFloat("u_VoxelSize",    domain.voxelSize);
 
-        // ivec2 for texture size
+        marchCS.setFloat("u_DensityScale", densityScale);
+        marchCS.setFloat("u_SigmaS",       sigmaS);
+        marchCS.setFloat("u_SigmaA",       sigmaA);
+        marchCS.setFloat("u_PhaseBlend",   phaseBlend);
+        marchCS.setFloat("u_G",            g);
+
+        marchCS.setVec3 ("u_LightDir",     light.getDirection());
+        marchCS.setVec3 ("u_LightColor",   light.getColor());
+        marchCS.setFloat("u_Time",         timeSec);
+
+        marchCS.setFloat("u_EdgeFadeWidth", edgeFadeWidth);
+        marchCS.setFloat("u_CurlStrength",  curlStrength);
+        marchCS.setFloat("u_NoiseStrength", noiseStrength);
+
         glUniform2i(glGetUniformLocation(marchCS.ID, "u_TexSize"), halfW, halfH);
 
-        // sampler binding
         marchCS.setInt("u_DepthTex", 0);
         marchCS.setInt("u_NoiseTex", 1);
 
@@ -131,13 +115,9 @@ public:
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
     }
 
-    // Draw the smoke result composited over the current framebuffer content.
-    // Call this after rendering the scene (e.g. voxel debug view).
     void blit(FullscreenQuad& quad) {
         glEnable(GL_BLEND);
         glBlendFunc(GL_ONE, GL_SRC_ALPHA);
-        // final = smokeRGB * 1  +  scene * transmittance
-        // (transmittance is in alpha channel)
 
         blitShader.use();
         blitShader.setInt("u_SmokeTex", 0);
@@ -152,7 +132,7 @@ public:
 
     void destroy() {
         smokeOut.destroy();
-        if (marchCS.ID)   { glDeleteProgram(marchCS.ID);   marchCS.ID = 0; }
+        if (marchCS.ID)    { glDeleteProgram(marchCS.ID);    marchCS.ID = 0; }
         if (blitShader.ID) { glDeleteProgram(blitShader.ID); blitShader.ID = 0; }
     }
 
@@ -162,9 +142,6 @@ private:
     int halfW = 0, halfH = 0;
 
     void buildBlitShader() {
-        // Full-screen quad pass that composites smoke over the scene.
-        // Uses pre-multiplied alpha blend:
-        //   result = smokeRGB + scene * transmittance
         const char* vs = GLSL_VERSION
             "layout(location=0) in vec2 aPos;\n"
             "layout(location=1) in vec2 aUV;\n"
@@ -177,7 +154,6 @@ private:
             "uniform sampler2D u_SmokeTex;\n"
             "void main() {\n"
             "    vec4 smoke = texture(u_SmokeTex, vUV);\n"
-            "    // RGB = accumulated scattered light, A = transmittance\n"
             "    FragColor = vec4(smoke.rgb, smoke.a);\n"
             "}\n";
 

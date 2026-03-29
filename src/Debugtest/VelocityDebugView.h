@@ -161,7 +161,7 @@ void main() {
     float t = clamp(speed / max(u_MaxSpeed, 1e-6), 0.0, 1.0);
 
     // Start at center, end along direction
-    float lineLen = u_VoxelSize * u_LengthScale;
+    float lineLen = u_VoxelSize * u_LengthScale * speed;
     vec3 startPos = center;
     vec3 endPos   = center + dir * lineLen;
 
