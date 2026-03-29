@@ -37,6 +37,7 @@ public:
     float edgeFadeWidth  = 0.3f;
     float curlStrength   = 1.0f;
     float noiseStrength  = 0.75f;
+    float noiseScale     = 3.0f;
 
     void init(int fullWidth, int fullHeight) {
         halfW = fullWidth  / 2;
@@ -105,6 +106,7 @@ public:
         marchCS.setFloat("u_EdgeFadeWidth", edgeFadeWidth);
         marchCS.setFloat("u_CurlStrength",  curlStrength);
         marchCS.setFloat("u_NoiseStrength", noiseStrength);
+        marchCS.setFloat("u_NoiseScale",    noiseScale);
 
         glUniform2i(glGetUniformLocation(marchCS.ID, "u_TexSize"), halfW, halfH);
 
