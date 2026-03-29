@@ -259,39 +259,38 @@ void main() {
         float densityBase = mix(baseDensity, warpedDensity, warpedBlend);
 
         // -----------------------------------------------------------------
-        // Density shaping: Worley bump factor
-        // Noise texture stores (1-dist)^3, peaked at cell centers.
-        // bumpFactor multiplies density: high at puff centers, near-zero at gaps.
+        // 4-octave FBM — finer octaves animate faster (turbulence cascade).
+        // Each octave doubles frequency and halves amplitude.
         // -----------------------------------------------------------------
-        // Scale by 3.0 so we see ~12 puff cells across the volume (4 base cells * 3).
-        // Without scaling, only 4 cells span the volume = too coarse, looks like a gradient.
-        vec3 erosionUVW = worldToVolumeUVW(pos) * u_NoiseScale
-                        + vec3(u_Time * 0.0025, u_Time * 0.0012, u_Time * -0.0018);
+        vec3 baseUVW = worldToVolumeUVW(pos) * u_NoiseScale;
 
-        // The noise texture stores (1-dist)^3 = ALREADY peaked at cell centers.
-        // Do NOT invert: sampling directly gives high values at puff centers, low at gaps.
-        float worleyCoarse = texture(u_NoiseTex, fract(erosionUVW)).r;
-        float worleyFine   = texture(u_NoiseTex, fract(erosionUVW * 2.0 + vec3(0.37, 0.51, 0.29))).r;
+        float o1 = texture(u_NoiseTex, fract(baseUVW       + vec3(u_Time * 0.0025,  u_Time *  0.0012, u_Time * -0.0018))).r;
+        float o2 = texture(u_NoiseTex, fract(baseUVW * 2.0 + vec3(u_Time * 0.0055,  u_Time *  0.0030, u_Time * -0.0040) + vec3(0.37, 0.51, 0.29))).r;
+        float o3 = texture(u_NoiseTex, fract(baseUVW * 4.0 + vec3(u_Time * 0.0110,  u_Time *  0.0070, u_Time * -0.0090) + vec3(0.19, 0.71, 0.53))).r;
+        float o4 = texture(u_NoiseTex, fract(baseUVW * 8.0 + vec3(u_Time * 0.0210,  u_Time *  0.0150, u_Time * -0.0180) + vec3(0.63, 0.13, 0.81))).r;
 
-        // Blend: coarse gives large puff shapes, fine adds smaller wispy sub-detail
-        float detailNoise = clamp(worleyCoarse * 0.6 + worleyFine * 0.4, 0.0, 1.0);
+        // Coarse FBM (octaves 1+2): defines large puff blob shapes.
+        float fbmCoarse = clamp((o1 * 0.625 + o2 * 0.250) / 0.875, 0.0, 1.0);
+        // Fine FBM (octaves 3+4): adds surface detail for fluffy eroded edges.
+        float fbmFine   = clamp((o3 * 0.625 + o4 * 0.250) / 0.875, 0.0, 1.0);
 
-        // Map detailNoise [0,1] -> bumpFactor [0.05, 2.0] = 40x peak/valley contrast.
-        // At puff centers (detailNoise~1): density x2.0 -> bright dense puff.
-        // At cell gaps  (detailNoise~0): density x0.05 -> nearly transparent hole.
-        float bumpFactor    = mix(0.05, 2.0, detailNoise);
+        // -----------------------------------------------------------------
+        // Two-stage density remapping applied to the FBM itself.
+        // The flood-fill density is near-binary (boundary mask), so remapping
+        // it directly gives no interior detail. Instead, remap the FBM value
+        // (which is smooth 0..1) to create puff shapes, then use that to
+        // multiplicatively modulate the flood-fill density.
+        // -----------------------------------------------------------------
+        // Stage 1: fine FBM erodes the coarse FBM surface (fluffy edges).
+        float detailErode = min(0.8, fbmFine * u_NoiseStrength);
+        float fbmShaped   = clamp((fbmCoarse - detailErode * 0.2) / max(1.0 - detailErode * 0.2, 1e-5), 0.0, 1.0);
+
+        // Stage 2: multiply flood-fill density by the shaped FBM.
+        // mix(1, bumpFactor, strength) = no effect at strength 0, full puff at strength 1.
+        float bumpFactor    = mix(0.02, 1.5, fbmShaped);
         float shapedDensity = densityBase * mix(1.0, bumpFactor, u_NoiseStrength);
 
-        // -----------------------------------------------------------------
-        // Mild scalar modulation, also density-masked and bounded
-        // -----------------------------------------------------------------
-        float noiseVal = texture(u_NoiseTex, fract(noiseUVW)).r;
-        noiseVal = noiseVal * 2.0 - 1.0;
-
-        float noiseFactor = 1.0 + noiseVal * u_NoiseStrength * 0.15 * noiseMask;
-        noiseFactor = clamp(noiseFactor, 0.80, 1.20);
-
-        float density = shapedDensity * noiseFactor * u_DensityScale;
+        float density = shapedDensity * u_DensityScale;
         density = max(density, 0.0);
 
         if (density > 0.00001) {
