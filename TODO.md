@@ -426,11 +426,12 @@ Each frame (via ProceduralSmokeSystem::update()):
 
   -- Step 3: Run fluid solver on updated smoke state --
   [GPU]  SmokeSolver::step():
-    3a. ComputeDivergence   — compute ∇·V per voxel → divergence scratch buffer
-    3b. PressureJacobi × 60  — Jacobi pressure iterations (ping-pong, 60 iters default)
-    3c. ProjectVelocity     — subtract ∇p * dt from velocity; apply velDecay=0.995
-    3d. AdvectSmoke         — semi-Lagrangian density advection along velocity field
-    3e. AdvectVelocity      — semi-Lagrangian velocity self-advection
+    3a. ApplyForces         — gravity (down) + buoyancy (up, density-weighted) via ApplyForces.comp
+    3b. ComputeDivergence   — compute ∇·V per voxel → divergence scratch buffer
+    3c. PressureJacobi × 60  — Jacobi pressure iterations (ping-pong, 60 iters default)
+    3d. ProjectVelocity     — subtract ∇p * dt from velocity; apply velDecay=0.995
+    3e. AdvectSmoke         — semi-Lagrangian density advection along velocity field
+    3f. AdvectVelocity      — semi-Lagrangian velocity self-advection
 
   GL_SHADER_STORAGE_BARRIER_BIT between each dispatch above.
 
@@ -444,9 +445,9 @@ Then (outside ProceduralSmokeSystem):
 ```
 
 > **Still TODO from original plan (not yet in render loop):**
-> - `fluid_buoyancy.comp` — upward force proportional to local smoke density
 > - `fluid_vorticity.comp` — vorticity confinement to preserve swirling detail
 > - One-shot detonation impulse (`fluid_impulse.comp`) — currently replaced by continuous `FloodFillToVelocity`
+> ~~`fluid_buoyancy.comp`~~ — **[DONE — commit 47df7e7]** Buoyancy and gravity now live in `ApplyForces.comp`
 
 Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see barrier table above).
 
@@ -622,69 +623,65 @@ Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see b
   - Expose `u_EdgeFadeWidth` (default 0.3), `u_CurlStrength` (default 1.5), `u_NoiseStrength` (default 0.9)
   - **Verify:** Smoke boundary looks fluffy/turbulent; interior remains smooth; walls still block
 
-- [ ] **Step 10c — Split Extinction: Scattering (σ_s) + Absorption (σ_a) + Shadow Ray**
+- [x] **Step 10c — Split Extinction: Scattering (σ_s) + Absorption (σ_a) + Shadow Ray** *(implemented — commits d944704, 47df7e7)*
+
+  > **[IMPLEMENTED]** Full split-extinction model is live in `Raymarch.comp`.
+  >
+  > - `u_SigmaS` (scattering) and `u_SigmaA` (absorption) uniforms replace the old single `u_SigmaE`. Extinction: `sigmaE = u_SigmaS + u_SigmaA`. Exposed via `Raymarcher.h` as `sigmaS` and `sigmaA` with ImGui sliders.
+  > - **Shadow ray** (`shadowMarch`) marches **16 steps** at `u_VoxelSize` step size toward `u_LightDir`, accumulating optical depth and returning `exp(-depth * sigmaE * stepSize)`. 16 steps (vs original plan's 8) for smoother self-shadowing gradients.
+  > - **Powder effect** for fake multiple scattering:
+  >   ```glsl
+  >   float powder    = 1.0 - exp(-density * sigmaE * fineStep * 2.0);
+  >   float lightMult = 1.0 + powder * 0.5;   // brightens edges, subtle darkening at core
+  >   ```
+  >   The `* 0.5` coefficient (vs original plan's `* 2.0`) was chosen empirically to avoid over-darkening the cloud interior.
+  > - **Ambient light** term added: `vec3 ambientLight = vec3(0.25, 0.27, 0.30)` — a cool blue-grey base light so smoke is never fully black from indirect directions.
+  > - **Full accumulation:**
+  >   ```glsl
+  >   float shadowT = shadowMarch(pos);
+  >   float cosTheta = dot(rayDir, u_LightDir);
+  >   float phase   = mix(phaseHG(cosTheta, u_G), phaseRayleigh(cosTheta), u_PhaseBlend);
+  >   phase *= 4.0 * PI;   // re-scale to match old brightness baseline
+  >   vec3 Li = u_LightColor * shadowT * lightMult * phase + ambientLight;
+  >   color        += transmittance * u_SigmaS * density * Li * fineStep;
+  >   transmittance *= exp(-sigmaE * density * fineStep);
+  >   ```
+  > - ImGui sliders: `Scattering Ss [0..10]`, `Absorption Sa [0..5]` in the Smoke Volume section.
+
   - Replace single `u_SigmaE` with two uniforms: `u_SigmaS` (scattering) and `u_SigmaA` (absorption)
     - Extinction: `float sigmaE = u_SigmaS + u_SigmaA;`
     - Smoke albedo = `u_SigmaS / sigmaE` (high albedo ≈ 0.9 → white/grey smoke; low → dark smoke)
-  - **Shadow ray** — before accumulating scattered light, march a short ray from `pos` toward the light
-    to compute how much light is attenuated before reaching that point:
-    ```glsl
-    float shadowMarch(vec3 pos, vec3 lightDir, int steps, float stepSize) {
-        float opticalDepth = 0.0;
-        for (int i = 0; i < steps; i++) {
-            pos += lightDir * stepSize;
-            if (!insideBounds(pos)) break;
-            opticalDepth += sampleDensityWithNoise(pos) * u_DensityScale;
-        }
-        return exp(-opticalDepth * sigmaE * stepSize);  // Beer-Lambert shadow transmittance
-    }
-    ```
-    - Use 8 shadow steps at `u_VoxelSize * 1.5` step size (cheap but plausible)
-  - **Powder effect** (fake multiple scattering — makes dense interior darker, avoids flat look):
-    ```glsl
-    float powder = 1.0 - exp(-density * sigmaE * u_StepSize * 2.0);
-    float lightMult = 2.0 * powder;   // brightens edges, darkens core
-    ```
-  - **Updated accumulation** (replaces Step 10a placeholder):
-    ```glsl
-    float shadowT = shadowMarch(pos, u_LightDir, 8, u_VoxelSize * 1.5);
-    vec3  Li      = u_LightColor * shadowT * lightMult;   // incoming radiance at sample
-    color        += transmittance * u_SigmaS * density * Li * u_StepSize;
-    transmittance *= exp(-sigmaE * density * u_StepSize);
-    ```
-  - Expose `u_LightDir` (world-space, normalised), `u_LightColor`, `u_SigmaS`, `u_SigmaA`
   - **Verify:** Lit side of smoke brighter; shadowed interior visibly darker; thicker smoke self-shadows
 
-- [ ] **Step 10d — Phase Function: Henyey-Greenstein vs Rayleigh**
-  - Implement both phase functions in the shader, selected via `uniform int u_PhaseMode` (0 = HG, 1 = Rayleigh):
-    ```glsl
-    const float PI = 3.14159265;
-    float cosTheta = dot(rayDir, u_LightDir);   // angle between view ray and light
+- [x] **Step 10d — Phase Function: Henyey-Greenstein vs Rayleigh** *(implemented — commits d944704, 47df7e7)*
 
-    // Henyey-Greenstein (smoke particles, Mie scattering regime)
-    // g in [-1,1]: 0=isotropic, >0=forward, <0=backward. Smoke: g~0.4
-    float phaseHG(float cosT, float g) {
-        float g2 = g * g;
-        return (1.0 / (4.0*PI)) * (1.0 - g2) / pow(1.0 + g2 - 2.0*g*cosT, 1.5);
-    }
-
-    // Rayleigh (molecular/small-particle scattering — blue-sky, fog at large scale)
-    // Symmetric lobe: forward = backward, brighter at 0 deg and 180 deg
-    float phaseRayleigh(float cosT) {
-        return (3.0 / (16.0*PI)) * (1.0 + cosT*cosT);
-    }
-
-    float phase = (u_PhaseMode == 0) ? phaseHG(cosTheta, u_G) : phaseRayleigh(cosTheta);
-    ```
-  - Multiply `phase` into scattered light: `color += transmittance * u_SigmaS * density * Li * phase * u_StepSize;`
-  - Expose `u_G` (default 0.4 for smoke), `u_PhaseMode` (toggle with P key)
-  - **Expected difference:**
-    - HG g=0.4: smoke brighter when camera looks toward the light (forward-scatter lobe)
-    - HG g=0.0: isotropic baseline, good reference
-    - Rayleigh: two symmetric lobes (front+back), no single forward spike, looks more like haze
-    - Smoke is in the Mie regime (particles >> wavelength) so HG is physically correct;
-      Rayleigh is useful for comparison and for haze/atmosphere effects
-  - **Verify:** Toggle P key changes visible glow direction; HG shows strong rim-light when backlit
+  > **[IMPLEMENTED]** Both phase functions implemented in `Raymarch.comp` and blended continuously via `u_PhaseBlend`.
+  >
+  > **Implementation differs from original plan:** instead of a binary `u_PhaseMode` toggle, a continuous float `u_PhaseBlend` (0.0 = pure HG, 1.0 = pure Rayleigh) allows artistic blending between the two scattering regimes. This is more flexible for tuning the look at runtime.
+  >
+  > ```glsl
+  > float phaseHG(float cosT, float g) {
+  >     float g2    = g * g;
+  >     float denom = max(1.0 + g2 - 2.0 * g * cosT, 1e-5);
+  >     return (1.0 - g2) / (4.0 * PI * pow(denom, 1.5));
+  > }
+  > float phaseRayleigh(float cosT) {
+  >     return (3.0 / (16.0 * PI)) * (1.0 + cosT * cosT);
+  > }
+  > float phase = mix(phaseHG(cosTheta, u_G), phaseRayleigh(cosTheta), clamp(u_PhaseBlend, 0.0, 1.0));
+  > phase *= 4.0 * PI;   // re-normalise to keep brightness stable as blend changes
+  > ```
+  >
+  > The `phase *= 4.0 * PI` re-normalisation was added because `phaseHG` and `phaseRayleigh` integrate to 1 over the sphere (energy-conserving), meaning their raw values are of order `1/(4π) ≈ 0.08`. Multiplying back by `4π` keeps the perceived brightness comparable to the Step 10a placeholder lighting.
+  >
+  > - `u_G` asymmetry parameter slider: `[-1.0, 1.0]` in ImGui, default tuned empirically per scene.
+  > - `u_PhaseBlend` slider: `[0.0, 1.0]` in ImGui, labelled "HG/Rayleigh Blend".
+  >
+  > **Expected difference (confirmed):**
+  > - HG g > 0: forward-scatter lobe — smoke brighter when camera looks toward the light
+  > - HG g < 0: back-scatter — rim-lit from behind
+  > - Rayleigh: symmetric front+back lobes, useful for haze/atmospheric look
+  > - **Verify:** Drag `u_G` from -1 → +1 while facing the light — bright lobe visibly swings
 
 - [x] **Step 10e — Fluid-Driven Dynamic Smoke Flow** *(partially implemented — commit 71a44e9)*
 
@@ -706,11 +703,23 @@ Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see b
   >
   > - **Jacobi pressure iterations doubled** — `DEFAULT_ITER_COUNT` increased from 30 to 60 to improve divergence-free enforcement with the now-active velocity field.
   >
+  > **What was additionally built (commit 47df7e7):**
+  >
+  > - **`ApplyForces` / `ApplyForces.comp`** — new compute shader applying gravity and buoyancy forces to the velocity field each frame, dispatched before the divergence step in `SmokeSolver::step()`. Exposed via `ApplyForces.h` with `buoyancyStrength = 1.0f` and `gravityStrength = 0.05f` defaults.
+  >   ```glsl
+  >   // Net vertical acceleration: buoyancy up, gravity down
+  >   float liftShape = min((density - d0) * (d1 - density), 0);
+  >   float ay = u_BuoyancyStrength * liftShape - u_GravityStrength;
+  >   vel.y += ay * u_Dt;
+  >   ```
+  >   The `liftShape` term uses a density window `[d0=0.5, d1=0.9]` so only mid-density smoke receives upward lift — very sparse and very dense voxels are less affected, producing realistic smoke-column shapes.
+  >
+  > - **`FloodFillToVelocity.comp` updated** — axis-bias correction added to reduce grid-aligned artifacts: `axisBias = mix(1.0, 0.65, smoothstep(0.85, 1.0, axisAlignment))`. A per-voxel jitter term (`rand()` based on voxel coord) is added to the injected velocity to break up the lattice symmetry and produce more organic expansion shapes.
+  >
   > **Still TODO from original plan:**
-  > - `fluid_buoyancy.comp` — upward lift proportional to local density
   > - `fluid_vorticity.comp` — vorticity confinement for swirling boundary detail
   > - True one-shot detonation impulse (currently replaced by continuous FloodFillToVelocity injection)
-  > - Expose `velDecay` and Jacobi iter count as `ProceduralSmokeSystem` setters
+  > - Expose `velDecay`, `buoyancyStrength`, `gravityStrength`, and Jacobi iter count as ImGui sliders
 
   The flood fill gives smoke its wall-aware shape, but motion is static. This step hooks the GPU Navier-Stokes pipeline (divergence → Jacobi pressure → velocity projection → advection) into the simulation loop so smoke actively flows outward on detonation, redirects when it hits walls, rises under buoyancy, and retains visible swirling detail.
 

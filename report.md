@@ -15,13 +15,14 @@ This report describes the GPU implementation of a real-time volumetric smoke gre
 
 Volumetric effects such as smoke, fog, and fire belong to the class of *participating media*: materials that absorb, emit, and scatter light along a ray rather than only at a surface. Physically accurate simulation requires solving the Radiative Transfer Equation (RTE), which in its full form is intractable in real time (Chandrasekhar, 1960). Real-time games historically approximated smoke using billboarded 2D sprites, which do not occlude correctly and cannot interact with scene geometry. Valve's CS2 (2023) introduced a system in which a smoke grenade detonates and a volumetric cloud fills the available space in a room, correctly blocked by walls and doors. The design was publicly analyzed by Gunnell (2023) in a Unity recreation. This project ports that system to standalone OpenGL 4.3/C++, implementing every subsystem from scratch using compute shaders, SSBOs, and 3D textures.
 
-The system is structured as five sequential GPU passes executed each frame:
+The system is structured as sequential GPU passes executed each frame:
 
 1. **Voxelization** — convert static scene geometry to a binary voxel occupancy grid (run once at startup)
 2. **Flood fill propagation** — expand a smoke density SSBO from the detonation voxel, blocked by occupied voxels
-3. **Worley noise generation** — regenerate a 128³ animated noise volume
-4. **Volumetric ray marching** — integrate scattered radiance along each camera ray through the density field
-5. **Composite** — blend the half-resolution ray march result over the scene using Beer-Lambert transmittance
+3. **Fluid simulation** — apply gravity/buoyancy forces, solve pressure-projection Navier-Stokes, semi-Lagrangian advect density
+4. **Worley noise generation** — regenerate a 128³ animated noise volume
+5. **Volumetric ray marching** — integrate scattered radiance along each camera ray through the density field using Beer-Lambert transmittance, HG/Rayleigh phase functions, shadow rays, and powder effect
+6. **Composite** — blend the ray march result over the scene
 
 ---
 
@@ -266,28 +267,132 @@ $$P_{powder} = 1 - e^{-2\,\rho \cdot \sigma_e \cdot \Delta s}$$
 
 This value is used to modulate the light contribution, making the interior of the cloud appear darker than its outer surface — the characteristic "cotton-ball" appearance of real smoke. Physically, it is a first-order approximation to the multiple-scattering integral that is otherwise too expensive to evaluate in real time.
 
-### 6.4 Henyey-Greenstein Phase Function
+### 6.4 Phase Functions: Henyey-Greenstein and Rayleigh Blend
 
-Isotropic phase functions ($p = 1/4\pi$) produce smoke that scatters light equally in all directions, which is physically inaccurate. Real smoke particles preferentially forward-scatter (Mie scattering regime). The Henyey-Greenstein phase function (Henyey & Greenstein, 1941) provides a single-parameter model:
+Isotropic phase functions ($p = 1/4\pi$) produce smoke that scatters light equally in all directions, which is physically inaccurate. Real smoke particles preferentially forward-scatter (Mie scattering regime). Two phase functions are implemented and blended continuously via a `u_PhaseBlend` uniform.
+
+**Henyey-Greenstein (HG)** — single-parameter model for Mie-regime particles (Henyey & Greenstein, 1941):
 
 $$p_{HG}(\cos\theta, g) = \frac{1}{4\pi} \cdot \frac{1 - g^2}{\left(1 + g^2 - 2g\cos\theta\right)^{3/2}}$$
 
-where $g \in [-1, 1]$ is the *asymmetry parameter*: $g = 0$ gives isotropic scattering, $g > 0$ forward-scatters (smoke appears brighter looking toward the light), $g < 0$ back-scatters. Real smoke in game context uses $g \approx 0.3$–$0.6$ (Gunnell, 2023; Wrenninge, 2012).
+where $g \in [-1, 1]$ is the *asymmetry parameter*: $g = 0$ gives isotropic scattering, $g > 0$ forward-scatters (smoke appears brighter when camera looks toward the light), $g < 0$ back-scatters. CS2 smoke uses $g \approx 0.3$–$0.6$ (Gunnell, 2023; Wrenninge, 2012).
 
-The phase function is evaluated at each ray march step using $\cos\theta = \hat{\mathbf{d}} \cdot \hat{\mathbf{l}}$ (dot product of ray and light directions).
+**Rayleigh** — symmetric two-lobe model appropriate for molecular scattering (air, haze):
 
-### 6.5 Coarse-Fine Two-Phase March
+$$p_{R}(\cos\theta) = \frac{3}{16\pi}\left(1 + \cos^2\theta\right)$$
+
+Rayleigh produces equal forward and backward lobes with no net directionality, which is physically correct for particles much smaller than the light wavelength but useful as a stylistic alternative.
+
+**Blend:** The two models are mixed continuously:
+
+$$p(\cos\theta) = \bigl(1 - \alpha\bigr)\, p_{HG}(\cos\theta, g) + \alpha\, p_{R}(\cos\theta)$$
+
+where $\alpha = \texttt{u\_PhaseBlend} \in [0, 1]$. The result is multiplied by $4\pi$ before use in the accumulation integral to maintain brightness consistency as the blend changes (both functions integrate to 1 over the sphere, so their raw magnitudes are of order $1/(4\pi) \approx 0.08$; rescaling avoids dimming the smoke when switching modes).
+
+The phase function is evaluated at each step using $\cos\theta = \hat{\mathbf{d}} \cdot \hat{\mathbf{l}}$ (dot product of ray direction and light direction).
+
+### 6.5 Worley Noise Erosion and Domain Warp
+
+A single trilinear SSBO lookup would render a smooth, featureless cloud. The ray marcher applies two noise-based modulations to give smoke its characteristic wispy boundary.
+
+**Domain warp** shifts the sample position by a warp vector computed from the noise texture itself at three staggered offsets (approximating a curl-like displacement without a separate curl texture):
+
+$$\mathbf{w} = \begin{pmatrix} W(\mathbf{u}) \\ W(\mathbf{u} + \boldsymbol{\delta}_1) \\ W(\mathbf{u} + \boldsymbol{\delta}_2) \end{pmatrix} \cdot 2 - 1$$
+
+where $\mathbf{u} = \texttt{worldToVolumeUVW}(\mathbf{p}) + t \cdot 0.04$ is a time-animated volume coordinate and $\boldsymbol{\delta}_1 = (0.37, 0.11, 0.23)$, $\boldsymbol{\delta}_2 = (0.19, 0.41, 0.07)$. The warp is masked by a density-based smoothstep $\texttt{noiseMask} = \texttt{smoothstep}(0.02, 0.20, \rho_{\text{base}})$ so only non-trivially dense voxels are displaced; near-zero density cells are not warped and cannot generate spurious density outside the flood-fill boundary.
+
+**Worley erosion** carves internal structure using two octaves of the noise volume at different scales:
+
+$$\text{erosion} = \left(1 - \bigl(0.65 \cdot W_{\text{coarse}} + 0.35 \cdot W_{\text{fine}}\bigr)\right)^{e(\rho)}$$
+
+where $e(\rho) = e_0 \cdot \text{mix}(1, 2.2,\, \texttt{smoothstep}(0.18, 0.65, \rho))$ increases the erosion exponent inside dense smoke for harsher interior breakup. An additional density mask $(\texttt{smoothstep}(0.06, 0.45, \rho))^{0.65}$ ensures thin wisps at the cloud boundary are not over-eroded into nothing.
+
+### 6.6 Coarse-Fine Two-Phase March
 
 Marching at uniform step size through mostly-empty space is wasteful. A two-phase strategy is used:
 
-1. **Coarse skip phase:** March at $2 \times$ voxel size until the trilinearly-interpolated density exceeds a small threshold (e.g., 0.005). This skips empty space cheaply.
-2. **Fine accumulation phase:** Switch to a small fixed step size $\Delta s$ and apply Beer-Lambert + phase accumulation.
+1. **Coarse skip phase:** March at $2 \times$ voxel size until the trilinearly-interpolated density exceeds a small threshold (e.g., 0.002). This skips empty space cheaply. The number of coarse steps is dynamically bounded: $N_{\text{coarse}} = \lceil (t_{\text{exit}} - t_{\text{enter}}) / \Delta s_{\text{coarse}} \rceil + 2$, clamped to $[1, 1024]$.
+2. **Fine accumulation phase:** Switch to $\Delta s = 0.5 \times$ voxel size and apply Beer-Lambert + phase + shadow + noise accumulation. Similarly bounded to $[1, 4096]$ steps.
 
-The ray is clipped to the scene geometry depth buffer (reconstructed from a depth-only FBO rendered before the compute dispatch), so smoke does not bleed through walls when viewed from close range.
+The ray is clipped to the scene geometry depth buffer (reconstructed from a depth-only FBO rendered before the compute dispatch), converting raw depth to a linear eye-space distance and projecting it onto the ray direction, so smoke does not bleed through walls when viewed from close range.
 
 ---
 
-## 7. Summary
+## 7. Fluid-Driven Smoke Dynamics
+
+### 7.1 Incompressible Navier-Stokes on a Voxel Grid
+
+Static density fields produce visually inert smoke. To model realistic outward expansion, wall deflection, and buoyancy, the system solves a simplified incompressible Navier-Stokes equation on the same voxel grid used for flood fill. The continuity constraint requires the velocity field to be divergence-free at every voxel:
+
+$$\nabla \cdot \mathbf{V} = 0$$
+
+This is enforced each frame via the pressure-projection method (Stam, 1999; Bridson, 2008).
+
+### 7.2 External Forces: Buoyancy and Gravity
+
+Before the pressure solve, an `ApplyForces` compute shader applies body forces to the velocity field. Each non-wall voxel receives a net vertical acceleration:
+
+$$a_y = F_{\text{buoy}} \cdot \ell(\rho) - F_{\text{grav}}$$
+
+where $F_{\text{buoy}}$ and $F_{\text{grav}}$ are tunable scalars (defaults $1.0$ and $0.05$ respectively), and $\ell(\rho)$ is a density-windowed lift shape:
+
+$$\ell(\rho) = \min\bigl((\rho - \rho_0)(\rho_1 - \rho),\; 0\bigr), \quad \rho_0 = 0.5,\; \rho_1 = 0.9$$
+
+The window $[\rho_0, \rho_1]$ concentrates buoyant lift on mid-density smoke voxels: very sparse voxels (below $\rho_0$) and very dense voxels (above $\rho_1$) receive minimal lift. This produces realistic smoke-column shapes where the densest core rises without the entire volume accelerating uniformly upward.
+
+The velocity is updated as:
+
+$$V_y \leftarrow V_y + a_y \cdot \Delta t$$
+
+Wall voxels have their velocity zeroed unconditionally, preventing forces from accumulating inside solid geometry.
+
+### 7.3 Divergence Computation
+
+The per-voxel divergence is computed using central finite differences across the 6-connected face neighbours:
+
+$$\nabla \cdot \mathbf{V}[i] = \frac{(V_x^{i+1} - V_x^{i-1}) + (V_y^{j+1} - V_y^{j-1}) + (V_z^{k+1} - V_z^{k-1})}{2 \cdot h}$$
+
+where $h$ is the voxel size. For faces adjacent to a wall voxel, the wall neighbour's velocity component is treated as zero (no-penetration boundary condition), baking wall blocking directly into the divergence field rather than requiring special-case logic in the pressure solver.
+
+### 7.4 Pressure Solve: Jacobi Iteration
+
+The pressure Poisson equation $\nabla^2 p = \nabla \cdot \mathbf{V} / \Delta t$ is solved iteratively using the Jacobi method. Each iteration is a single compute dispatch reading from the pressure ping buffer and writing to the pong buffer:
+
+$$p^{(n+1)}[i] = \frac{p_L + p_R + p_D + p_U + p_B + p_F - (\nabla \cdot \mathbf{V})[i] \cdot h^2}{6}$$
+
+At solid wall boundaries, the missing neighbour pressure is replaced by the current voxel's pressure (Neumann zero-gradient condition), preventing pressure from leaking into geometry. The solver runs 60 iterations per frame (doubled from the original 30 after activating the full velocity field to improve convergence).
+
+### 7.5 Velocity Projection
+
+After the pressure solve, the velocity field is made divergence-free by subtracting the pressure gradient:
+
+$$\mathbf{V}_{\text{new}}[i] = \mathbf{V}[i] - \frac{1}{2h}\begin{pmatrix}p_{i+1} - p_{i-1} \\ p_{j+1} - p_{j-1} \\ p_{k+1} - p_{k-1}\end{pmatrix}$$
+
+A velocity decay factor $\lambda = 0.995$ is applied every frame to model viscous dissipation. Post-projection, any velocity component pointing into an adjacent wall face is zeroed out, implementing the wall deflection effect: smoke flowing toward a wall stalls, turns, and streams along the surface.
+
+### 7.6 Semi-Lagrangian Advection
+
+Smoke density is transported along the velocity field using semi-Lagrangian advection (Stam, 1999), which is unconditionally stable regardless of timestep:
+
+$$\rho_{\text{new}}(\mathbf{x}) = \rho_{\text{old}}\!\left(\mathbf{x} - \mathbf{V}(\mathbf{x})\,\Delta t\right)$$
+
+The back-traced position $\mathbf{x} - \mathbf{V}\Delta t$ is not guaranteed to fall on a grid point, so the old density is sampled using the same 8-corner trilinear interpolation used in the ray marcher. A dissipation multiplier $\approx 0.995$ per frame models the gradual fading of real smoke.
+
+### 7.7 Velocity Seeding: FloodFillToVelocity
+
+The flood fill wavefront injects radial outward velocity into every voxel it reaches each frame (continuous emitter model):
+
+$$\mathbf{V}_{\text{inject}} = \hat{\mathbf{d}} \cdot S \cdot w \cdot b + \boldsymbol{\epsilon}$$
+
+where $\hat{\mathbf{d}} = \texttt{normalize}(\mathbf{x} - \mathbf{x}_{\text{seed}})$, $S$ is the inject strength, $w = \rho_{\text{flood}} \cdot \max(0, 1 - r/r_{\max})$ combines the flood-fill density with a radial falloff, $b$ is an axis-bias correction $b = \text{mix}(1.0, 0.65, \texttt{smoothstep}(0.85, 1.0, \max(|d_x|, |d_y|, |d_z|)))$ that reduces strength along axis-aligned directions to counteract grid symmetry artifacts, and $\boldsymbol{\epsilon}$ is a small per-voxel random jitter that breaks up the lattice structure:
+
+$$\boldsymbol{\epsilon} = \hat{\mathbf{r}} \cdot 0.15 \cdot w, \quad \hat{\mathbf{r}} = \texttt{normalize}(\texttt{rand}(\mathbf{x}) \cdot 2 - 1)$$
+
+The jitter uses a `fract(sin(dot(...)))` hash keyed on voxel coordinates, producing spatially coherent but deterministic perturbations.
+
+---
+
+## 8. Summary
 
 The table below maps each technique to its primary reference and the design rationale over alternatives:
 
@@ -298,10 +403,14 @@ The table below maps each technique to its primary reference and the design rati
 | Spatial constraint | Oblate ellipsoid gate in normalised coords | Gunnell (2023) | Pure anisotropic decay produces octahedral L1 shape |
 | Density iso-surfaces | Euclidean distance in ellipsoid space | — | Hop-count (L1) produces pyramid cross-section |
 | Flood fill blocking | 6-connected BFS with wall mask | — | 26-connected allows diagonal tunnelling through 1-voxel walls |
-| Noise | Worley fBm + domain warp | Worley (1996) | Perlin noise too smooth; Value noise too blocky for convective clouds |
+| Noise | Worley fBm + domain warp + erosion | Worley (1996) | Perlin noise too smooth; Value noise too blocky for convective clouds |
 | Transmittance | Beer-Lambert exponential | Kajiya & Von Herzen (1984), Max (1995) | Linear absorption incorrect for thick media |
-| Phase function | Henyey-Greenstein, $g \approx 0.4$ | Henyey & Greenstein (1941) | Isotropic underestimates forward-scatter lobe visible at sunrise/sunset |
-| Self-shadowing | Shadow ray + powder effect | Schneider & Vines (2015) | Full multiple-scattering too expensive; Lambert-only too flat |
+| Phase function | HG + Rayleigh continuous blend, $g$ tunable | Henyey & Greenstein (1941) | Isotropic underestimates forward-scatter lobe; hard toggle less flexible than blend |
+| Self-shadowing | 16-step shadow ray + powder effect | Schneider & Vines (2015) | Full multiple-scattering too expensive; Lambert-only too flat |
+| Fluid dynamics | Pressure-projection Navier-Stokes, 60 Jacobi iters | Stam (1999); Bridson (2008) | Simple velocity advection without pressure solve produces compressible, wall-penetrating flow |
+| Buoyancy/gravity | Density-windowed lift shape $\ell(\rho)$, per-frame body force | — | Uniform buoyancy lifts entire volume equally; windowed shape produces realistic column rise |
+| Velocity seeding | Radial inject + axis-bias correction + per-voxel jitter | — | Pure radial inject creates visible axis-aligned symmetry artifacts on regular grids |
+| Density advection | Semi-Lagrangian back-trace + trilinear interpolation | Stam (1999) | Forward scatter causes gaps and unconditional instability for large $\Delta t$ |
 
 ---
 
@@ -326,5 +435,9 @@ Schneider, J., & Vines, N. (2015). Real-time volumetric cloudscapes. In W. Engel
 Schwarz, M., & Seidel, H.-P. (2010). Fast parallel surface and solid voxelization on GPUs. *ACM Transactions on Graphics (SIGGRAPH Asia), 29*(6), Article 179. https://doi.org/10.1145/1882261.1866201
 
 Worley, S. (1996). A cellular texture basis function. *Proceedings of the 23rd Annual Conference on Computer Graphics and Interactive Techniques (SIGGRAPH '96)*, 291–294. https://doi.org/10.1145/237170.237267
+
+Bridson, R. (2008). *Fluid simulation for computer graphics*. CRC Press.
+
+Stam, J. (1999). Stable fluids. *Proceedings of the 26th Annual Conference on Computer Graphics and Interactive Techniques (SIGGRAPH '99)*, 121–128. https://doi.org/10.1145/311535.311548
 
 Wrenninge, M. (2012). *Production volume rendering: Design and implementation*. CRC Press.
