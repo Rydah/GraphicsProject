@@ -53,6 +53,7 @@ uniform float u_EdgeFadeWidth;
 uniform float u_CurlStrength;
 uniform float u_NoiseStrength;
 uniform float u_NoiseScale;    // puff frequency: cells visible across volume (default 3.0)
+uniform float u_HazeFloor;     // 0 = many holes, 1 = smooth blob (default 0.3)
 
 // Texture output size
 uniform ivec2 u_TexSize;
@@ -98,7 +99,11 @@ float sampleSmoke(vec3 worldPos) {
 
 vec3 worldToVolumeUVW(vec3 worldPos) {
     vec3 extent = max(u_BoundsMax - u_BoundsMin, vec3(1e-5));
-    return (worldPos - u_BoundsMin) / extent;
+    // Use the longest axis as a uniform denominator so noise cells are
+    // isotropic in world space. Per-axis division stretches the noise
+    // differently on each axis, causing streaking when viewed from the side.
+    float maxExtent = max(extent.x, max(extent.y, extent.z));
+    return (worldPos - u_BoundsMin) / maxExtent;
 }
 
 float linearizeDepth(float d) {
@@ -285,10 +290,15 @@ void main() {
         float detailErode = min(0.8, fbmFine * u_NoiseStrength);
         float fbmShaped   = clamp((fbmCoarse - detailErode * 0.2) / max(1.0 - detailErode * 0.2, 1e-5), 0.0, 1.0);
 
-        // Stage 2: multiply flood-fill density by the shaped FBM.
-        // mix(1, bumpFactor, strength) = no effect at strength 0, full puff at strength 1.
-        float bumpFactor    = mix(0.02, 1.5, fbmShaped);
-        float shapedDensity = densityBase * mix(1.0, bumpFactor, u_NoiseStrength);
+        // Stage 2: power-curve puff shaping with a density floor.
+        // The floor (0.3) keeps gaps from being fully transparent — smoke fills
+        // the volume with wispy haze between puffs, like real CS2 smoke.
+        //   strength=0: exponent~0 -> no noise effect
+        //   strength=1: exponent=1.5 -> clear puff/gap contrast
+        float puffExponent  = max(u_NoiseStrength * 1.5, 0.001);
+        float fbmPow        = pow(clamp(fbmShaped, 0.0, 1.0), puffExponent);
+        float fbmFloored    = fbmPow * (1.0 - u_HazeFloor) + u_HazeFloor;
+        float shapedDensity = densityBase * fbmFloored * (1.0 + u_NoiseStrength * 0.5);
 
         float density = shapedDensity * u_DensityScale;
         density = max(density, 0.0);

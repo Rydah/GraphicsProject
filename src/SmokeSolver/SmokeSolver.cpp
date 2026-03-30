@@ -71,16 +71,18 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
     );
     smoke.swapVelocity();
 
-    // advect smoke (we can actually choose to advect the smoke or velocity first or later as it doesnt matter visually)
-    advectSmoke_.iterate(
-        smoke.domain,
-        smoke.getSrcVelocity(),
-        smoke.getSrcDensity(),
-        smoke.getDestDensity(),
-        wallBuf,
-        dt
-    );
-    smoke.swapDensity();
+    // advect smoke
+    if (advectSmokeEnabled) {
+        advectSmoke_.iterate(
+            smoke.domain,
+            smoke.getSrcVelocity(),
+            smoke.getSrcDensity(),
+            smoke.getDestDensity(),
+            wallBuf,
+            dt
+        );
+        smoke.swapDensity();
+    }
     
 
 

@@ -593,6 +593,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             static int expansionSpeed = 3;
             if (ImGui::SliderInt("Expansion Speed", &expansionSpeed, 1, 8))
                 smokeSystem.setFloodFillStepsPerFrame(expansionSpeed);
+            ImGui::Checkbox("Advect Smoke", &solver.advectSmokeEnabled);
         }
 
         // --- Light ---
@@ -628,7 +629,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
         // --- Smoke Volume ---
         if (ImGui::CollapsingHeader("Smoke Volume", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::SliderFloat("Density Scale", &raymarcher.densityScale, 0.1f, 10.0f);
+            ImGui::SliderFloat("Density Scale", &raymarcher.densityScale, 0.1f, 30.0f);
             ImGui::SliderFloat("Scattering Ss", &raymarcher.sigmaS,       0.0f, 10.0f);
             ImGui::SliderFloat("Absorption Sa", &raymarcher.sigmaA,       0.0f, 5.0f);
         }
@@ -644,6 +645,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         if (ImGui::CollapsingHeader("Noise & Edge")) {
             ImGui::SliderFloat("Noise Strength", &raymarcher.noiseStrength, 0.0f, 1.0f);
             ImGui::SliderFloat("Noise Scale",    &raymarcher.noiseScale,    0.5f, 8.0f);
+            ImGui::SliderFloat("Haze Floor",     &raymarcher.hazeFloor,     0.0f, 1.0f);
             ImGui::SliderFloat("Edge Fade Width",&raymarcher.edgeFadeWidth, 0.05f, 0.6f);
             ImGui::SliderFloat("Curl Strength",  &raymarcher.curlStrength,  0.0f, 4.0f);
         }

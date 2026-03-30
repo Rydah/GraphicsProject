@@ -15,7 +15,8 @@ static constexpr float DEFAULT_DIFFUSION = 0.001f;
 
 class SmokeSolver {
 public:
-    int pressureIterations = DEFAULT_ITER_COUNT;
+    int  pressureIterations = DEFAULT_ITER_COUNT;
+    bool advectSmokeEnabled = true;
 
     void init();
     void step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt);
