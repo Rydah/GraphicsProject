@@ -246,7 +246,7 @@ void main() {
         }
 
         // -----------------------------------------------------------------
-        // Low-density-aware spatial warp (your earlier stability idea)
+        // Low-density-aware spatial warp 
         // -----------------------------------------------------------------
         vec3 noiseUVW = fract(worldToVolumeUVW(pos) + vec3(u_Time * 0.04));
         float noiseMask = smoothstep(0.02, 0.20, baseDensity);
