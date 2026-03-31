@@ -390,30 +390,6 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     SmokeField smoke;
     smoke.init(voxelizer.domain);
 
-
-    // // --- START DEBUG --- Just to seed the initial velocities for the smoke solver for debugging remove after integration with the floodfill
-    // std::vector<glm::vec4> initVel(voxelizer.domain.totalVoxels, glm::vec4(0.0f));
-
-    // for (int z = 0; z < voxelizer.domain.gridSize.z; ++z) {
-    //     for (int y = 0; y < voxelizer.domain.gridSize.y; ++y) {
-    //         for (int x = 0; x < voxelizer.domain.gridSize.x; ++x) {
-    //             glm::ivec3 c(x, y, z);
-    //             int idx = voxelizer.domain.flatten(c);
-
-    //             // small test region near one corner
-    //             if (x >= 4 && x <= 8 &&
-    //                 y >= 1 && y <= 4 &&
-    //                 z >= 4 && z <= 8) {
-    //                 initVel[idx] = glm::vec4(1.0f, -2.0f, 1.0f, 0.0f);
-    //             }
-    //         }
-    //     }
-    // }
-    
-    // smoke.velocity1.upload(initVel);
-    // smoke.velocity2.upload(initVel);
-    // // --- END DEBUG ---
-
     SmokeSolver solver;
     solver.init();
 
@@ -634,8 +610,54 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             ImGui::SliderFloat("Absorption Sa", &raymarcher.sigmaA,       0.0f, 5.0f);
         }
 
+        // --- SMoke Behaviour ---
+        if (ImGui::CollapsingHeader("Smoke Behaviour")) {
+            float smokeSeedDensity = smokeSystem.getFloodFillSmokeInjectStrength();
+            if (ImGui::SliderFloat("Smoke Seed Density", &smokeSeedDensity, 0.0f, 10.0f)) {
+                smokeSystem.setFloodFillSmokeInjectStrength(smokeSeedDensity);
+            }
+
+            float smokeSeedVelocity = smokeSystem.getFloodFillVelocityInjectStrength();
+            if (ImGui::SliderFloat("Smoke Seed Velocity", &smokeSeedVelocity, 0.0f, 10.0f)) {
+                smokeSystem.setFloodFillVelocityInjectStrength(smokeSeedVelocity);
+            }
+
+            int seedSteps = smokeSystem.getFloodFillStepsPerFrame();
+            if (ImGui::SliderInt("Smoke Seed Steps", &seedSteps, 0, 20)) {
+                smokeSystem.setFloodFillStepsPerFrame(seedSteps);
+            }
+
+            float smokeFallOffFloor = 0.9995f;
+            float smokeFallOffDelta = 0.0005f;
+            float smokeFallOff = (solver.getSmokeFallOff()-smokeFallOffFloor)/smokeFallOffDelta;
+            if (ImGui::SliderFloat("Smoke FallOff", &smokeFallOff, 0.0f, 1.0f)) {
+                solver.setSmokeFallOff(smokeFallOffFloor + smokeFallOff * smokeFallOffDelta);
+            }
+
+            float smokeDiffRate = solver.getSmokeDiffusionRate();
+            if (ImGui::SliderFloat("Smoke Diffusion Rate", &smokeDiffRate, 0.0f, 0.1f)) {
+                solver.setSmokeDiffsionRate(smokeDiffRate);
+            }
+
+            ImGui::SliderInt("Pressure Iterations", &solver.pressureIterations, 0, 500);
+
+        }
+
+        // --- Forces ---
+        if (ImGui::CollapsingHeader("Forces")) {
+            float buoyancy = solver.getBuoyancy();
+            if (ImGui::SliderFloat("Buoyancy Strength", &buoyancy, 0.0f, 2.0f)) {
+                solver.setBuoyancy(buoyancy);
+            }
+
+            float gravity = solver.getGravity();
+            if (ImGui::SliderFloat("Gravity Strength", &gravity, 0.0f, 2.0f)) {
+                solver.setGravity(gravity);
+            }
+        }
+
         // --- Phase Function ---
-        if (ImGui::CollapsingHeader("Phase Function", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader("Phase Function")) {
             ImGui::SliderFloat("HG/Rayleigh Blend", &raymarcher.phaseBlend, 0.0f, 1.0f);
             ImGui::SameLine(); ImGui::TextDisabled("(0=HG  1=Rayleigh)");
             ImGui::SliderFloat("HG Anisotropy g",   &raymarcher.g,         -1.0f, 1.0f);
@@ -645,8 +667,8 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         if (ImGui::CollapsingHeader("Noise & Edge")) {
             ImGui::SliderFloat("Noise Strength", &raymarcher.noiseStrength, 0.0f, 1.0f);
             ImGui::SliderFloat("Noise Scale",    &raymarcher.noiseScale,    0.5f, 8.0f);
-            ImGui::SliderFloat("Haze Floor",     &raymarcher.hazeFloor,     0.0f, 1.0f);
-            ImGui::SliderFloat("Edge Fade Width",&raymarcher.edgeFadeWidth, 0.05f, 0.6f);
+            // ImGui::SliderFloat("Haze Floor",     &raymarcher.hazeFloor,     0.0f, 1.0f);
+            // ImGui::SliderFloat("Edge Fade Width",&raymarcher.edgeFadeWidth, 0.05f, 0.6f);
             ImGui::SliderFloat("Curl Strength",  &raymarcher.curlStrength,  0.0f, 4.0f);
         }
 

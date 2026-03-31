@@ -28,6 +28,7 @@ float rand(vec3 co) {
 
 uniform ivec3 u_GridSize;
 uniform int u_FloodFillMaxValue;
+uniform int u_FloodFillRadius;
 
 // NEW: needed for radial direction
 uniform ivec3 u_SeedCoord;
@@ -108,7 +109,7 @@ void main()
     //
     // vec3 injectVel = dir * u_InjectStrength * floodNorm;
     // change u_FloodFillMaxValue to u_maxFill (12)
-    float radialFalloff = max(0.0, 1.0 - len / 12.0);
+    float radialFalloff = max(0.0, 1.0 - len / float(u_FloodFillRadius));
     float sourceWeight = floodNorm * radialFalloff;
 
     // 1.0 when very axis-aligned, lower for diagonals

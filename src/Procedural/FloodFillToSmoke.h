@@ -20,7 +20,7 @@ public:
     void init();
     void injectSmoke(
         const SSBOBuffer& floodFillBuf,
-        int floodFillMaxValue,
+        int floodFillRadius,
         const VoxelDomain& domain,
         const glm::ivec3& seedCoord,
         const SSBOBuffer& srcSmokeDensityBuf,
@@ -30,6 +30,7 @@ public:
     void injectVelocity(
         const SSBOBuffer& floodFillBuf,
         int floodFillMaxValue,
+        int floodFillRadius,
         const VoxelDomain& domain,
         const glm::ivec3& seedCoord,
         const SSBOBuffer& srcVelocityBuf,
@@ -39,6 +40,7 @@ public:
     void injectAll(
         const SSBOBuffer& floodFillBuf,
         int floodFillMaxValue,
+        int floodFillRadius,
         const VoxelDomain& domain,
         const SSBOBuffer& srcSmokeDensityBuf,
         SSBOBuffer& destSmokeDensityBuf,
@@ -50,13 +52,10 @@ public:
     );
     void destroy();
 
-    // setters to expose these parameters to proceduralsmokesystem
-    void setVelocityInjectStrength(float strength) { velocityInjectStrength_ = strength;}
-    void setSmokeDenseInjectStrength(float strength) { smokeDenseInjectStrength_ = strength;}
-
+    // Tunable parameters to proceduralsmokesystem
+    float velocityInjectStrength_ = DEFAULT_VELOCITY_INJECT_STRENGTH;
+    float smokeDenseInjectStrength_ = DEFAULT_SMOKEDENSE_INJECT_STRENGTH;
 private:
     ComputeShader smokeFillShader_;
     ComputeShader velocityFillShader_;
-    float velocityInjectStrength_ = DEFAULT_VELOCITY_INJECT_STRENGTH;
-    float smokeDenseInjectStrength_ = DEFAULT_SMOKEDENSE_INJECT_STRENGTH;
 };

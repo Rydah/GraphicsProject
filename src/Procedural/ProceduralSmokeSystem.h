@@ -22,10 +22,12 @@ public:
     void destroy();
 
     // Public setter methods to change the tunable parameters
-    void setFloodFillStepsPerFrame(int steps) { floodFillStepsPerFrame_ = steps; }
-    void setFloodFillVelocityInjectStrength(float strength) { floodFillToSmoke_.setVelocityInjectStrength(strength);}
-    void setFloodFillSmokeInjectStrength(float strength) { floodFillToSmoke_.setSmokeDenseInjectStrength(strength);}
-
+    void setFloodFillStepsPerFrame(int steps) { floodFillStepsPerFrame_ = steps; } // num floodfill steps between fluid solving steps
+    int getFloodFillStepsPerFrame() { return floodFillStepsPerFrame_; }
+    void setFloodFillVelocityInjectStrength(float strength) { floodFillToSmoke_.velocityInjectStrength_ = strength;} // seeded smoke velocity
+    float getFloodFillVelocityInjectStrength() { return floodFillToSmoke_.velocityInjectStrength_; }
+    void setFloodFillSmokeInjectStrength(float strength) { floodFillToSmoke_.smokeDenseInjectStrength_ = strength;} // seeded smoke density
+    float getFloodFillSmokeInjectStrength() { return floodFillToSmoke_.smokeDenseInjectStrength_; }
     // Add in other tunable parameters here
 
 private:

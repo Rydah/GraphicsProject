@@ -4,14 +4,11 @@
 #include "core/ComputeShader.h"
 #include "Voxel/VoxelDomain.h"
 
-class AdvectSmoke {
+class DiffuseSmoke {
 public:
-    float smokeFallOff = 0.9995f;
-
     void init();
 
     void iterate(const VoxelDomain& domain,
-                 const SSBOBuffer& srcVelocityBuf,
                  const SSBOBuffer& srcSmokeDensityBuf,
                  SSBOBuffer& destSmokeDensityBuf,
                  const SSBOBuffer& wallBuf,
@@ -19,6 +16,15 @@ public:
 
     void destroy();
 
+    void setSmokeDiffuseRate(float smokeDiffuseRate) {
+        smokeDiffuseRate_ = smokeDiffuseRate;
+    }
+
+    float getSmokeDiffuseRate() {
+        return smokeDiffuseRate_;
+    }
+
 private:
     ComputeShader shader_;
+    float smokeDiffuseRate_ = 0.01f;
 };

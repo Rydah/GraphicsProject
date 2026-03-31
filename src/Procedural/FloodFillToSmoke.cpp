@@ -7,7 +7,7 @@ void FloodFillToSmoke::init() {
 
 void FloodFillToSmoke::injectSmoke(
         const SSBOBuffer& floodFillBuf,
-        int floodFillMaxValue,
+        int floodFillRadius,
         const VoxelDomain& domain,
         const glm::ivec3& seedCoord,
         const SSBOBuffer& srcSmokeDensityBuf,
@@ -25,7 +25,7 @@ void FloodFillToSmoke::injectSmoke(
 
     smokeFillShader_.use();
     smokeFillShader_.setIVec3("u_GridSize", domain.gridSize);
-    smokeFillShader_.setInt("u_FloodFillMaxValue", floodFillMaxValue);
+    smokeFillShader_.setInt("u_FloodFillRadius", floodFillRadius);
     smokeFillShader_.setIVec3("u_SeedCoord", seedCoord);
     smokeFillShader_.setFloat("u_InjectStrength", smokeDenseInjectStrength_);
 
@@ -51,6 +51,7 @@ void FloodFillToSmoke::injectSmoke(
 void FloodFillToSmoke::injectVelocity(
         const SSBOBuffer& floodFillBuf,
         int floodFillMaxValue,
+        int floodFillRadius,
         const VoxelDomain& domain,
         const glm::ivec3& seedCoord,
         const SSBOBuffer& srcVelocityBuf,
@@ -69,6 +70,7 @@ void FloodFillToSmoke::injectVelocity(
     velocityFillShader_.use();
     velocityFillShader_.setIVec3("u_GridSize", domain.gridSize);
     velocityFillShader_.setInt("u_FloodFillMaxValue", floodFillMaxValue);
+    velocityFillShader_.setInt("u_FloodFillRadius", floodFillRadius);
     velocityFillShader_.setIVec3("u_SeedCoord", seedCoord);
     velocityFillShader_.setFloat("u_InjectStrength", velocityInjectStrength_);
 
@@ -80,6 +82,7 @@ void FloodFillToSmoke::injectVelocity(
 void FloodFillToSmoke::injectAll(
         const SSBOBuffer& floodFillBuf,
         int floodFillMaxValue,
+        int floodFillRadius,
         const VoxelDomain& domain,
         const SSBOBuffer& srcSmokeDensityBuf,
         SSBOBuffer& destSmokeDensityBuf,
@@ -91,7 +94,7 @@ void FloodFillToSmoke::injectAll(
     ) {
     injectSmoke(
         floodFillBuf,
-        floodFillMaxValue,
+        floodFillRadius,
         domain,
         seedCoord,
         srcSmokeDensityBuf,
@@ -102,6 +105,7 @@ void FloodFillToSmoke::injectAll(
         injectVelocity(
             floodFillBuf,
             floodFillMaxValue,
+            floodFillRadius,
             domain,
             seedCoord,
             srcVelocityBuf,

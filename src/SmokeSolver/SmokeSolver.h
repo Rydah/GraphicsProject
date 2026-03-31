@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SmokeSolver/DiffuseSmoke.h"
 #include "SmokeSolver/AdvectSmoke.h"
 #include "SmokeSolver/AdvectVelocity.h"
 #include "SmokeSolver/ComputeDivergence.h"
@@ -22,6 +23,42 @@ public:
     void step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt);
     void destroy();
 
+    // Sets the buoyancy force strength (0.0 - 2.0f)
+    void setBuoyancy(float buoyancy) {
+        applyForces_.buoyancyStrength = buoyancy; 
+    }
+
+    float getBuoyancy() {
+        return applyForces_.buoyancyStrength; 
+    }
+
+    // Sets the gravity force strength (0.0 - 2.0f)
+    void setGravity(float gravity) {
+        applyForces_.gravityStrength = gravity;
+    }
+
+    float getGravity() {
+        return applyForces_.gravityStrength; 
+    }
+
+    // Sets Smoke falloff (0.0 - 1.0f)
+    void setSmokeFallOff(float smokeFallOff) {
+        advectSmoke_.smokeFallOff = smokeFallOff;
+    }
+
+    float getSmokeFallOff() {
+        return advectSmoke_.smokeFallOff; 
+    }
+
+    // Sets Smoke Diffusion rate (0.0 - 0.1f)
+    void setSmokeDiffsionRate(float smokeDiffusionRate) {
+        diffuseSmoke_.setSmokeDiffuseRate(smokeDiffusionRate);
+    }
+
+    float getSmokeDiffusionRate() {
+        return diffuseSmoke_.getSmokeDiffuseRate(); 
+    }
+
 private:
     ApplyForces applyForces_;
     AdvectVelocity advectVelocity_;
@@ -29,4 +66,5 @@ private:
     ComputeDivergence computeDivergence_;
     PressureJacobi pressureJacobi_;
     ProjectVelocity projectVelocity_;
+    DiffuseSmoke diffuseSmoke_;
 };

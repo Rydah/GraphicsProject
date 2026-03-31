@@ -23,8 +23,9 @@ layout(std430, binding = 3) writeonly buffer SmokeDensityDest {
 };
 
 uniform ivec3 u_GridSize;
-uniform int u_FloodFillMaxValue; // might not need this
-uniform ivec3 u_SeedCoord;       // might not need this
+// uniform int u_FloodFillMaxValue; // replaced u_floodFillMaxValue with u_FloodFillRadius
+uniform int u_FloodFillRadius;
+uniform ivec3 u_SeedCoord;       
 uniform float u_InjectStrength;
 
 int flatIdx(ivec3 c)
@@ -63,7 +64,7 @@ void main()
 
     float len = length(dir);
 
-    float radialFalloff = max(0.0, 1.0 - len / 12.0); // change hardcoded 12 to the floodfill radius
+    float radialFalloff = max(0.0, 1.0 - len / float(u_FloodFillRadius)); // change hardcoded 12 to the floodfill radius
 
     // we might have to put more thought into this (Maybe a binary mask so we dont have to consider the advected smoke?)
     // float floodNorm = 0.0;

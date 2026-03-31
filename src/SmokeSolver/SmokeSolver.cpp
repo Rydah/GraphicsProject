@@ -7,6 +7,7 @@ void SmokeSolver::init() {
     computeDivergence_.init();
     pressureJacobi_.init();
     projectVelocity_.init();
+    diffuseSmoke_.init();
 }
 
 void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
@@ -84,7 +85,15 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
         smoke.swapDensity();
     }
     
-
+    // diffuse smoke
+    diffuseSmoke_.iterate(
+        smoke.domain,
+        smoke.getSrcDensity(),
+        smoke.getDestDensity(),
+        wallBuf,
+        dt
+    );
+    smoke.swapDensity();
 
 }
 
@@ -94,4 +103,5 @@ void SmokeSolver::destroy() {
     computeDivergence_.destroy();
     pressureJacobi_.destroy();
     projectVelocity_.destroy();
+    diffuseSmoke_.destroy();
 }
