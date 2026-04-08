@@ -16,6 +16,7 @@ public:
 
     void destroy();
 
+    float smokeCoolingRate = 0.01;
 private:
     ComputeShader shader_;
 };

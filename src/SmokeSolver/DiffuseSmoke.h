@@ -26,5 +26,5 @@ public:
 
 private:
     ComputeShader shader_;
-    float smokeDiffuseRate_ = 0.01f;
+    float smokeDiffuseRate_ = 0.05f;
 };

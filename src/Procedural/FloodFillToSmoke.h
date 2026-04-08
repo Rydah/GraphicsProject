@@ -4,8 +4,9 @@
 #include "core/ComputeShader.h"
 #include "Voxel/VoxelDomain.h"
 
-constexpr float DEFAULT_VELOCITY_INJECT_STRENGTH = 1.0f;
-constexpr float DEFAULT_SMOKEDENSE_INJECT_STRENGTH = 0.8f; 
+constexpr float DEFAULT_VELOCITY_INJECT_STRENGTH = 0.1f;
+constexpr float DEFAULT_SMOKEDENSE_INJECT_STRENGTH = 0.8f;
+constexpr float DEFAULT_SMOKETEMP_INJECT_STRENTH = 30.0f;
 
 /* Wrapper class for injecting flood-fill-derived source terms into the smoke simulation.
 
@@ -55,6 +56,7 @@ public:
     // Tunable parameters to proceduralsmokesystem
     float velocityInjectStrength_ = DEFAULT_VELOCITY_INJECT_STRENGTH;
     float smokeDenseInjectStrength_ = DEFAULT_SMOKEDENSE_INJECT_STRENGTH;
+    float tempInjectStrenth_ = DEFAULT_SMOKETEMP_INJECT_STRENTH;
 private:
     ComputeShader smokeFillShader_;
     ComputeShader velocityFillShader_;

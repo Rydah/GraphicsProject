@@ -14,7 +14,7 @@ layout(std430, binding = 1) readonly buffer Walls {
 
 // 2 -> current velocity source
 layout(std430, binding = 2) readonly buffer VelocitySrc {
-    vec4 velocitySrc[];   // xyz = velocity, w unused
+    vec4 velocitySrc[];   // xyz = velocity, w = temperature
 };
 
 // 3 -> destination velocity
@@ -30,11 +30,11 @@ uniform ivec3 u_GridSize;
 uniform int u_FloodFillMaxValue;
 uniform int u_FloodFillRadius;
 
-// NEW: needed for radial direction
+// needed for radial direction
 uniform ivec3 u_SeedCoord;
 
-// optional tuning
 uniform float u_InjectStrength;
+uniform float u_TempInjectStrength;
 
 int flatIdx(ivec3 c)
 {
@@ -58,19 +58,21 @@ void main()
 
     int idx = flatIdx(coord);
 
-    // solid cells have zero velocity
+    // solid cells have zero velocity/temp
     if (walls[idx] != 0) {
         velocityDest[idx] = vec4(0.0);
         return;
     }
 
-    vec3 oldVel = velocitySrc[idx].xyz;
+    vec4 oldState = velocitySrc[idx];
+    vec3 oldVel = oldState.xyz;
+    float oldTemp = oldState.w;
 
     int floodVal = floodFillSrc[idx];
 
-    // no source here -> just pass through
+    // no source here -> pass through existing state
     if (floodVal <= 0) {
-        velocityDest[idx] = vec4(oldVel, 0.0);
+        velocityDest[idx] = vec4(oldVel, oldTemp);
         return;
     }
 
@@ -90,25 +92,6 @@ void main()
     else
         dir = vec3(0.0);
 
-    // radial outward injection
-    // floodNorm is derived from flood-fill propagation budget.
-    // It is NOT true Euclidean distance, but a path-based measure that
-    // decreases outward from the seed and respects obstacles.
-    //
-    // Currently we use floodNorm as a proxy for falloff strength:
-    // - high near seed -> strong velocity injection
-    // - low at edges -> weaker injection
-    //
-    // NOTE:
-    // This produces obstacle-aware but not perfectly radial falloff.
-    // For more physically accurate explosions, consider combining with
-    // true radial distance falloff:
-    //
-    //   radial = 1 - dist / maxRadius
-    //   strength = floodNorm * radial
-    //
-    // vec3 injectVel = dir * u_InjectStrength * floodNorm;
-    // change u_FloodFillMaxValue to u_maxFill (12)
     float radialFalloff = max(0.0, 1.0 - len / float(u_FloodFillRadius));
     float sourceWeight = floodNorm * radialFalloff;
 
@@ -135,5 +118,6 @@ void main()
 
     vec3 newVel = oldVel + injectVel + jitter;
 
-    velocityDest[idx] = vec4(newVel, 0.0);
+    // keep your current behavior: injected cells get source temperature
+    velocityDest[idx] = vec4(newVel, u_TempInjectStrength);
 }

@@ -73,6 +73,7 @@ void FloodFillToSmoke::injectVelocity(
     velocityFillShader_.setInt("u_FloodFillRadius", floodFillRadius);
     velocityFillShader_.setIVec3("u_SeedCoord", seedCoord);
     velocityFillShader_.setFloat("u_InjectStrength", velocityInjectStrength_);
+    velocityFillShader_.setFloat("u_TempInjectStrength", tempInjectStrenth_);
 
     velocityFillShader_.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
 

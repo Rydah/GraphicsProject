@@ -28,17 +28,17 @@ public:
     // Tweakable parameters
     float densityScale = 30.0f;
 
-    float sigmaS = 0.45f;   // scattering
-    float sigmaA = 0.6f;    // absorption
+    float sigmaS = 0.5f;   // scattering
+    float sigmaA = 0.8f;    // absorption
 
     float phaseBlend = 0.5f;    // 0 = Henyey-Greenstein, 1 = Rayleigh
-    float g = 0.20f;
+    float g = 0.5f;
 
     float edgeFadeWidth  = 0.3f;
     float curlStrength   = 1.0f;
     float noiseStrength  = 0.85f;
-    float noiseScale     = 3.2f;
-    float hazeFloor      = 0.0f;   // 0 = many holes, 1 = smooth blob
+    float noiseScale     = 1.3f;
+    float hazeFloor      = 0.1f;   // 0 = many holes, 1 = smooth blob
 
     void init(int fullWidth, int fullHeight) {
         halfW = fullWidth  / 2;
