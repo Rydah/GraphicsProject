@@ -12,8 +12,8 @@
 
 // --- ImGui ---
 #include "imgui.h"
-#include "imgui_impl_glfw.h"
-#include "imgui_impl_opengl3.h"
+#include "backends/imgui_impl_glfw.h"
+#include "backends/imgui_impl_opengl3.h"
 
 // --- Project headers ---
 #include "Debugtest/GLDebug.h"            // enableGLDebug(), printGPUInfo()
@@ -294,6 +294,39 @@ static void scroll_callback(GLFWwindow* window, double, double dy) {
     g_camera.onScroll((float)dy);
 }
 
+static void rebuildArena(
+    Voxelizer& voxelizer,
+    VoxelFloodFill& floodFill,
+    SmokeField& smoke,
+    float voxelSize,
+    int gridX, int gridY, int gridZ) {
+    // destroy bound objects as they contain references which we are currently using.
+    smoke.destroy();
+    floodFill.destroy();
+    voxelizer.destroy();
+
+    // Rebuild voxel arena
+    voxelizer.generateTestScene(voxelSize, gridX, gridY, gridZ);
+
+    // Refresh CPU cache used by mouse picking / seeding
+    g_wallVoxelCache = voxelizer.staticVoxels.download<int>(voxelizer.domain.totalVoxels);
+
+    // Reinit floodfill and smoke
+    floodFill.init(voxelizer.domain.totalVoxels);
+    smoke.init(voxelizer.domain);
+
+    // Optional extra safety if init() does not fully clear contents
+    floodFill.clear();
+    smoke.clear();
+
+    std::cout << "[Arena] Rebuilt to "
+              << voxelizer.domain.gridSize.x << "x"
+              << voxelizer.domain.gridSize.y << "x"
+              << voxelizer.domain.gridSize.z
+              << " @ voxelSize=" << voxelizer.domain.voxelSize
+              << std::endl;
+}
+
 //---------------------------------------------------------------------
 // main
 //---------------------------------------------------------------------
@@ -367,6 +400,12 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     voxelizer.generateTestScene(0.15f, 96, 32, 96);
     g_wallVoxelCache = voxelizer.staticVoxels.download<int>(voxelizer.domain.totalVoxels);
 
+    // pending arena settings for ImGUI (we ABSOLUTELY CANNOT allow a slider to constantly destroy and rebuild)
+    float pendingVoxelSize = voxelizer.domain.voxelSize;
+    int pendingGridX = voxelizer.domain.gridSize.x;
+    int pendingGridY = voxelizer.domain.gridSize.y;
+    int pendingGridZ = voxelizer.domain.gridSize.z;
+
     VoxelDebug voxelDebug;
     voxelDebug.init();
 
@@ -389,30 +428,6 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     // --- Smoke solver state ---
     SmokeField smoke;
     smoke.init(voxelizer.domain);
-
-
-    // // --- START DEBUG --- Just to seed the initial velocities for the smoke solver for debugging remove after integration with the floodfill
-    // std::vector<glm::vec4> initVel(voxelizer.domain.totalVoxels, glm::vec4(0.0f));
-
-    // for (int z = 0; z < voxelizer.domain.gridSize.z; ++z) {
-    //     for (int y = 0; y < voxelizer.domain.gridSize.y; ++y) {
-    //         for (int x = 0; x < voxelizer.domain.gridSize.x; ++x) {
-    //             glm::ivec3 c(x, y, z);
-    //             int idx = voxelizer.domain.flatten(c);
-
-    //             // small test region near one corner
-    //             if (x >= 4 && x <= 8 &&
-    //                 y >= 1 && y <= 4 &&
-    //                 z >= 4 && z <= 8) {
-    //                 initVel[idx] = glm::vec4(1.0f, -2.0f, 1.0f, 0.0f);
-    //             }
-    //         }
-    //     }
-    // }
-    
-    // smoke.velocity1.upload(initVel);
-    // smoke.velocity2.upload(initVel);
-    // // --- END DEBUG ---
 
     SmokeSolver solver;
     solver.init();
@@ -577,6 +592,47 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
         ImGui::Begin("Smoke Grenade");
 
+        // --- Arena Rebuild Controls ---
+        if (ImGui::CollapsingHeader("Arena", ImGuiTableColumnFlags_DefaultHide)) {
+            ImGui::SliderFloat("Voxel Size", &pendingVoxelSize, 0.05f, 0.5f);
+            ImGui::SliderInt("Grid X", &pendingGridX, 16, 256);
+            ImGui::SliderInt("Grid Y", &pendingGridY, 16, 128);
+            ImGui::SliderInt("Grid Z", &pendingGridZ, 16, 256);
+
+            ImGui::Text("Current: %d x %d x %d  |  voxelSize %.3f",
+                voxelizer.domain.gridSize.x,
+                voxelizer.domain.gridSize.y,
+                voxelizer.domain.gridSize.z,
+                voxelizer.domain.voxelSize);
+
+            bool changed =
+                pendingVoxelSize != voxelizer.domain.voxelSize ||
+                pendingGridX != voxelizer.domain.gridSize.x ||
+                pendingGridY != voxelizer.domain.gridSize.y ||
+                pendingGridZ != voxelizer.domain.gridSize.z;
+
+            if (!changed)
+                ImGui::BeginDisabled();
+
+            if (ImGui::Button("Rebuild Arena"))
+            {
+                rebuildArena(
+                    voxelizer,
+                    floodFill,
+                    smoke,
+                    pendingVoxelSize,
+                    pendingGridX,
+                    pendingGridY,
+                    pendingGridZ
+                );
+            }
+
+            if (!changed)
+                ImGui::EndDisabled();
+
+            ImGui::TextDisabled("Changes only apply when you click Rebuild Arena.");
+        }
+
         // --- Grenade Controls ---
         if (ImGui::CollapsingHeader("Grenade Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Button("Throw Grenade")) {
@@ -590,9 +646,10 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
                 smoke.clear();
             }
             ImGui::TextDisabled("Default seed is at center of the scene. Right-click on surfaces to seed.");
-            static int expansionSpeed = 3;
+            static int expansionSpeed = 1;
             if (ImGui::SliderInt("Expansion Speed", &expansionSpeed, 1, 8))
                 smokeSystem.setFloodFillStepsPerFrame(expansionSpeed);
+            ImGui::Checkbox("Advect Smoke", &solver.advectSmokeEnabled);
         }
 
         // --- Light ---
@@ -628,13 +685,98 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
         // --- Smoke Volume ---
         if (ImGui::CollapsingHeader("Smoke Volume", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::SliderFloat("Density Scale", &raymarcher.densityScale, 0.1f, 10.0f);
+            ImGui::SliderFloat("Density Scale", &raymarcher.densityScale, 0.1f, 30.0f);
             ImGui::SliderFloat("Scattering Ss", &raymarcher.sigmaS,       0.0f, 10.0f);
             ImGui::SliderFloat("Absorption Sa", &raymarcher.sigmaA,       0.0f, 5.0f);
         }
 
+        // --- SMoke Behaviour ---
+        if (ImGui::CollapsingHeader("Smoke Behaviour")) {
+            float smokeSeedDensity = smokeSystem.getFloodFillSmokeInjectStrength();
+            if (ImGui::SliderFloat("Smoke Seed Density", &smokeSeedDensity, 0.0f, 10.0f)) {
+                smokeSystem.setFloodFillSmokeInjectStrength(smokeSeedDensity);
+            }
+
+            float smokeSeedVelocity = smokeSystem.getFloodFillVelocityInjectStrength();
+            if (ImGui::SliderFloat("Smoke Seed Velocity", &smokeSeedVelocity, 0.0f, 10.0f)) {
+                smokeSystem.setFloodFillVelocityInjectStrength(smokeSeedVelocity);
+            }
+
+            float smokeSeedTemp = smokeSystem.getFloodFillTempInjectStrength();
+            if (ImGui::SliderFloat("Smoke Seed Temperature", &smokeSeedTemp, 0.0f, 400.0f)) {
+                smokeSystem.setFloodFillTempInjectStrength(smokeSeedTemp);
+            }
+
+            float smokeFallOffFloor = 0.9995f;
+            float smokeFallOffDelta = 0.0005f;
+            float smokeFallOff = (solver.getSmokeFallOff()-smokeFallOffFloor)/smokeFallOffDelta;
+            if (ImGui::SliderFloat("Smoke FallOff", &smokeFallOff, 0.0f, 1.0f)) {
+                solver.setSmokeFallOff(smokeFallOffFloor + smokeFallOff * smokeFallOffDelta);
+            }
+
+            float smokeDiffRate = solver.getSmokeDiffusionRate();
+            if (ImGui::SliderFloat("Smoke Diffusion Rate", &smokeDiffRate, 0.0f, 0.1f)) {
+                solver.setSmokeDiffsionRate(smokeDiffRate);
+            }
+
+            ImGui::SliderInt("Pressure Iterations", &solver.pressureIterations, 0, 2000);
+
+        }
+
+        // --- Forces ---
+        if (ImGui::CollapsingHeader("Forces")) {
+            bool useHeatBuoyancy = solver.getUseHeatBuoyancy();
+            if (ImGui::Checkbox("Use Heat Buoyancy", &useHeatBuoyancy)) {
+                solver.setUseHeatBuoyancy(useHeatBuoyancy);
+            }
+
+            if (!useHeatBuoyancy)
+            {
+                float buoyancy = solver.getBuoyancy();
+                if (ImGui::SliderFloat("Parabola Buoyancy Strength", &buoyancy, 0.0f, 2.0f)) {
+                    solver.setBuoyancy(buoyancy);
+                }
+
+                ImGui::Indent();
+
+                float range[2] = {
+                    solver.getMinSinkDensity(),
+                    solver.getMaxSinkDensity()
+                };
+
+                if (ImGui::SliderFloat2("Sink Density Range", range, 0.0f, 1.0f))
+                {
+                    if (range[0] > range[1])
+                        std::swap(range[0], range[1]);
+
+                    solver.setMinSinkDensity(range[0]);
+                    solver.setMaxSinkDensity(range[1]);
+                }
+
+                ImGui::Unindent();
+            }
+            else
+            {
+                float heatBuoyancy = solver.getHeatBuoyancy();
+                if (ImGui::SliderFloat("Heat Buoyancy Strength", &heatBuoyancy, 0.0f, 2.0f)) {
+                    solver.setHeatBuoyancy(heatBuoyancy);
+                }
+
+            }
+
+            float gravity = solver.getGravity();
+            if (ImGui::SliderFloat("Gravity Strength", &gravity, 0.0f, 2.0f)) {
+                solver.setGravity(gravity);
+            }
+
+            float baroClinic = solver.getBaroClinicStrength();
+            if (ImGui::SliderFloat("Baroclinic Strength (vorticity)", &baroClinic, 0.0f, 1.0f)) {
+                solver.setBaroClinicStrength(baroClinic);
+            }
+        }
+
         // --- Phase Function ---
-        if (ImGui::CollapsingHeader("Phase Function", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader("Phase Function")) {
             ImGui::SliderFloat("HG/Rayleigh Blend", &raymarcher.phaseBlend, 0.0f, 1.0f);
             ImGui::SameLine(); ImGui::TextDisabled("(0=HG  1=Rayleigh)");
             ImGui::SliderFloat("HG Anisotropy g",   &raymarcher.g,         -1.0f, 1.0f);
@@ -644,6 +786,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         if (ImGui::CollapsingHeader("Noise & Edge")) {
             ImGui::SliderFloat("Noise Strength", &raymarcher.noiseStrength, 0.0f, 1.0f);
             ImGui::SliderFloat("Noise Scale",    &raymarcher.noiseScale,    0.5f, 8.0f);
+            ImGui::SliderFloat("Haze Floor",     &raymarcher.hazeFloor,     0.0f, 1.0f);
             ImGui::SliderFloat("Edge Fade Width",&raymarcher.edgeFadeWidth, 0.05f, 0.6f);
             ImGui::SliderFloat("Curl Strength",  &raymarcher.curlStrength,  0.0f, 4.0f);
         }
