@@ -636,10 +636,14 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             // - R ON  -> final composite: sceneColorTex (walls) + volumetric raymarched smoke
             // - R OFF -> voxel debug smoke cubes (yellow/orange)
             if (g_raymarchEnabled) {
-                // Upsample the half-res ray march output to full resolution
-                upsampler.upsample(raymarcher.smokeOut, fsQuad);
-                // Composite with sharpening: smoke over scene
-                compositor.composite(sceneColorTex, upsampler.fullResOutput, depthPass.depthTex, fsQuad);
+                if (raymarchResolutionMode == 0) {
+                    // Full-res: skip upsampler, composite directly
+                    compositor.composite(sceneColorTex, raymarcher.smokeOut, depthPass.depthTex, fsQuad);
+                } else {
+                    // Half/quarter-res: upsample via Catmull-Rom then composite
+                    upsampler.upsample(raymarcher.smokeOut, fsQuad);
+                    compositor.composite(sceneColorTex, upsampler.fullResOutput, depthPass.depthTex, fsQuad);
+                }
             } else {
                 voxelDebug.drawWithSmoke(
                     voxelizer.staticVoxels,
@@ -664,6 +668,19 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
         ImGui::Begin("Smoke Grenade");
+
+        // --- Frame timing ---
+        {
+            static float frameSamples[60] = {};
+            static int   frameIdx = 0;
+            frameSamples[frameIdx] = dt * 1000.0f;
+            frameIdx = (frameIdx + 1) % 60;
+            float avgMs = 0.0f;
+            for (float s : frameSamples) avgMs += s;
+            avgMs /= 60.0f;
+            ImGui::Text("%.2f ms/frame  (%.0f FPS)", avgMs, 1000.0f / avgMs);
+        }
+        ImGui::Separator();
 
         // --- Arena Rebuild Controls ---
         if (ImGui::CollapsingHeader("Arena", ImGuiTableColumnFlags_DefaultHide)) {
