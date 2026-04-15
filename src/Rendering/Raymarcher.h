@@ -3,6 +3,7 @@
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
 
 #include "core/ComputeShader.h"
 #include "core/Buffer.h"
@@ -39,10 +40,12 @@ public:
     float noiseStrength  = 0.85f;
     float noiseScale     = 1.3f;
     float hazeFloor      = 0.1f;   // 0 = many holes, 1 = smooth blob
+    // Internal raymarch render scale (1.0 = full-res, 0.5 = half-res, 0.25 = quarter-res).
+    float resolutionScale = 0.5f;
 
     void init(int fullWidth, int fullHeight) {
-        halfW = fullWidth  / 2;
-        halfH = fullHeight / 2;
+        halfW = std::max(1, (int)(fullWidth  * resolutionScale));
+        halfH = std::max(1, (int)(fullHeight * resolutionScale));
 
         smokeOut.create(halfW, halfH, GL_RGBA16F);
 
@@ -51,8 +54,8 @@ public:
     }
 
     void resize(int fullWidth, int fullHeight) {
-        int newW = fullWidth  / 2;
-        int newH = fullHeight / 2;
+        int newW = std::max(1, (int)(fullWidth  * resolutionScale));
+        int newH = std::max(1, (int)(fullHeight * resolutionScale));
         if (newW == halfW && newH == halfH) return;
         halfW = newW;
         halfH = newH;

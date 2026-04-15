@@ -438,6 +438,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     // --- Raymarcher ---
     Raymarcher raymarcher;
     raymarcher.init(winWidth, winHeight);
+    int raymarchResolutionMode = 1; // 0=full, 1=half, 2=quarter
 
     // --- Upsampler (Catmull-Rom bicubic) ---
     Upsampler upsampler;
@@ -861,6 +862,18 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
         // --- Post-Processing (Sharpening & Compositing) ---
         if (ImGui::CollapsingHeader("Post-Processing", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const char* resItems[] = {
+                "1.0x (Full)",
+                "0.5x (Half)",
+                "0.25x (Quarter)"
+            };
+            if (ImGui::Combo("Raymarch Resolution", &raymarchResolutionMode, resItems, IM_ARRAYSIZE(resItems))) {
+                if (raymarchResolutionMode == 0) raymarcher.resolutionScale = 1.0f;
+                if (raymarchResolutionMode == 1) raymarcher.resolutionScale = 0.5f;
+                if (raymarchResolutionMode == 2) raymarcher.resolutionScale = 0.25f;
+                raymarcher.resize(winWidth, winHeight);
+            }
+
             ImGui::SliderFloat("Sharpen Strength", &compositor.sharpenStrength, 0.0f, 2.0f);
             ImGui::RadioButton("Final##debug",          &compositor.debugMode, Compositor::DEBUG_FINAL);      ImGui::SameLine();
             ImGui::RadioButton("Smoke Only##debug",     &compositor.debugMode, Compositor::DEBUG_SMOKE_ONLY); ImGui::SameLine();
