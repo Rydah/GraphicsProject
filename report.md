@@ -520,7 +520,7 @@ Then a power-curve and haze floor shape the final density:
 
 $$\text{fbm}_{final} = \text{fbm}_{shaped}^{\,e_p} \cdot (1 - H) + H$$
 
-where $e_p$ is a puff exponent (proportional to `noiseStrength`) and $H$ is the haze floor (`hazeFloor`). At $H = 0$ the noise can erode boundary regions to zero opacity, creating visible holes; raising $H$ to 0.1 maintains a minimum base density at the boundary, smoothing the transition.
+where $e_p$ is a puff exponent (proportional to `noiseStrength`) and $H$ is the haze floor (`hazeFloor`). At $H = 0$ the noise can erode boundary regions to zero opacity, creating visible holes; raising $H$ smooths the transition by maintaining a minimum base density at the boundary.
 
 #### 3.3.7 Coarse-Fine Two-Phase Ray March
 
@@ -542,7 +542,7 @@ The ray is clipped against the scene depth buffer (reconstructed from a depth-on
 | `phaseBlend` | `0.5` | Shifts toward Rayleigh (even, symmetric brightness) | Shifts toward pure HG (directional forward scatter) |
 | `noiseScale` | `1.3` | Higher noise frequency; smaller fragmented puffs | Larger puffs; smoke looks like a single smooth mass |
 | `noiseStrength` | `0.85` | Deep erosion; holes carved into the cloud | Smooth, barely-eroded cloud |
-| `hazeFloor` | `0.1` | Minimum density prevents full erosion at boundary | At 0.0 noise cuts to zero, creating visible swiss-cheese holes |
+| `hazeFloor` | `0.0` | Minimum density prevents full erosion at boundary | At 0.0 noise cuts to zero, creating visible swiss-cheese holes |
 | `curlStrength` | `1.0` | More swirling warp displacement at boundaries | Flat, undisplaced cloud boundary |
 
 **Notable parameter choices:**
@@ -553,7 +553,7 @@ The ray is clipped against the scene depth buffer (reconstructed from a depth-on
 
 **`noiseScale = 1.3`** was reduced from the previous default of 3.2. At 3.2 the noise frequency produced visibly "lumpy" texture resembling a textured sphere rather than billowing smoke. At 1.3 the puffs are large enough to read as distinct volumetric lobes.
 
-**`hazeFloor = 0.1`** was raised from 0.0 after testing revealed that a floor of zero allowed noise erosion to punch fully transparent holes through the smoke boundary, giving it a fragmented, broken appearance. The floor of 0.1 maintains a thin haze density at all points, smoothing the cloud edge.
+**`hazeFloor = 0.0`** allows full noise erosion at the smoke boundary. At zero, the noise can carve fully transparent holes through the cloud edge, giving a fragmented appearance; raising this value suppresses that erosion by maintaining a minimum base density at all points.
 
 ---
 
