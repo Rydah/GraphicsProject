@@ -2,7 +2,8 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
-// binding 0 -> source velocity
+// binding 0 -> source velocity/state
+// xyz = velocity, w = temperature
 layout(std430, binding = 0) readonly buffer VelocitySrc {
     vec4 velocitySrc[];
 };
@@ -12,7 +13,7 @@ layout(std430, binding = 1) readonly buffer Walls {
     int walls[];
 };
 
-// binding 2 -> destination velocity
+// binding 2 -> destination velocity/state
 layout(std430, binding = 2) writeonly buffer VelocityDest {
     vec4 velocityDest[];
 };
@@ -21,6 +22,7 @@ uniform ivec3 u_GridSize;
 uniform vec3  u_BoundsMin;
 uniform float u_CellSize;
 uniform float u_Dt;
+uniform float u_CoolingRate;
 
 int flatIdx(ivec3 c)
 {
@@ -55,15 +57,18 @@ vec3 worldToGridFloat(vec3 p)
     return ((p - u_BoundsMin) / u_CellSize) - vec3(0.5);
 }
 
-vec3 sampleVelocityAtCell(ivec3 c)
+// Sample full state:
+// xyz = velocity
+// w   = temperature
+vec4 sampleStateAtCell(ivec3 c)
 {
     if (!isFluidCell(c))
-        return vec3(0.0);
+        return vec4(0.0);
 
-    return velocitySrc[flatIdx(c)].xyz;
+    return velocitySrc[flatIdx(c)];
 }
 
-vec3 sampleVelocityTrilinear(vec3 worldPos)
+vec4 sampleStateTrilinear(vec3 worldPos)
 {
     vec3 gridPos = worldToGridFloat(worldPos);
 
@@ -73,28 +78,28 @@ vec3 sampleVelocityTrilinear(vec3 worldPos)
     vec3 f = fract(gridPos);
 
     // 8 corner samples
-    vec3 v000 = sampleVelocityAtCell(ivec3(c0.x, c0.y, c0.z));
-    vec3 v100 = sampleVelocityAtCell(ivec3(c1.x, c0.y, c0.z));
-    vec3 v010 = sampleVelocityAtCell(ivec3(c0.x, c1.y, c0.z));
-    vec3 v110 = sampleVelocityAtCell(ivec3(c1.x, c1.y, c0.z));
+    vec4 s000 = sampleStateAtCell(ivec3(c0.x, c0.y, c0.z));
+    vec4 s100 = sampleStateAtCell(ivec3(c1.x, c0.y, c0.z));
+    vec4 s010 = sampleStateAtCell(ivec3(c0.x, c1.y, c0.z));
+    vec4 s110 = sampleStateAtCell(ivec3(c1.x, c1.y, c0.z));
 
-    vec3 v001 = sampleVelocityAtCell(ivec3(c0.x, c0.y, c1.z));
-    vec3 v101 = sampleVelocityAtCell(ivec3(c1.x, c0.y, c1.z));
-    vec3 v011 = sampleVelocityAtCell(ivec3(c0.x, c1.y, c1.z));
-    vec3 v111 = sampleVelocityAtCell(ivec3(c1.x, c1.y, c1.z));
+    vec4 s001 = sampleStateAtCell(ivec3(c0.x, c0.y, c1.z));
+    vec4 s101 = sampleStateAtCell(ivec3(c1.x, c0.y, c1.z));
+    vec4 s011 = sampleStateAtCell(ivec3(c0.x, c1.y, c1.z));
+    vec4 s111 = sampleStateAtCell(ivec3(c1.x, c1.y, c1.z));
 
     // Interpolate along x
-    vec3 v00 = mix(v000, v100, f.x);
-    vec3 v10 = mix(v010, v110, f.x);
-    vec3 v01 = mix(v001, v101, f.x);
-    vec3 v11 = mix(v011, v111, f.x);
+    vec4 s00 = mix(s000, s100, f.x);
+    vec4 s10 = mix(s010, s110, f.x);
+    vec4 s01 = mix(s001, s101, f.x);
+    vec4 s11 = mix(s011, s111, f.x);
 
     // Interpolate along y
-    vec3 v0 = mix(v00, v10, f.y);
-    vec3 v1 = mix(v01, v11, f.y);
+    vec4 s0 = mix(s00, s10, f.y);
+    vec4 s1 = mix(s01, s11, f.y);
 
     // Interpolate along z
-    return mix(v0, v1, f.z);
+    return mix(s0, s1, f.z);
 }
 
 void main()
@@ -106,24 +111,30 @@ void main()
 
     int idx = flatIdx(coord);
 
-    // keep solid cells zeroed
+    // Keep solid cells zeroed.
+    // Since ambient temperature is centered at 0, zeroing .w is acceptable here too.
     if (walls[idx] != 0)
     {
         velocityDest[idx] = vec4(0.0);
         return;
     }
 
-    // current voxel center in world space
+    // Current voxel center in world space
     vec3 worldPos = gridToWorldCenter(coord);
 
-    // current velocity at this voxel
+    // Current velocity at this voxel (used for backtrace)
     vec3 vel = velocitySrc[idx].xyz;
 
-    // semi-Lagrangian backtrace
+    // Semi-Lagrangian backtrace
     vec3 prevWorldPos = worldPos - vel * u_Dt;
 
-    // trilinear sample previous velocity field
-    vec3 advectedVel = sampleVelocityTrilinear(prevWorldPos);
+    // Trilinear sample previous full state:
+    // xyz = advected velocity
+    // w   = advected temperature
+    vec4 advectedState = sampleStateTrilinear(prevWorldPos);
 
-    velocityDest[idx] = vec4(advectedVel, 0.0);
+    // newtons law of coolinf centred at 0
+    advectedState.w *= exp(-u_CoolingRate * u_Dt);
+
+    velocityDest[idx] = advectedState;
 }

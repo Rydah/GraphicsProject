@@ -20,9 +20,15 @@ void ApplyForces::dispatch(
     wallBuf.bindBase(3);
 
     forceCS.setIVec3("u_GridSize", domain.gridSize);
+    forceCS.setFloat("u_CellSize", domain.voxelSize);
     forceCS.setFloat("u_Dt", dt);
     forceCS.setFloat("u_GravityStrength", gravityStrength);
     forceCS.setFloat("u_BuoyancyStrength", buoyancyStrength);
+    forceCS.setInt("u_BuoyancyMode", buoyancyMode);
+    forceCS.setFloat("u_TemperatureBuoyancyStrength", tempBounyancyStrength);
+    forceCS.setFloat("u_DensityLow", densityLow);
+    forceCS.setFloat("u_DensityHigh", densityHigh);
+    forceCS.setFloat("u_BaroclinicStrength", BaroclinicStrength);
 
     forceCS.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);

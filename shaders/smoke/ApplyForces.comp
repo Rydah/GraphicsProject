@@ -4,7 +4,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 // 0 -> source velocity
 layout(std430, binding = 0) readonly buffer VelocitySrc {
-    vec4 velocitySrc[];
+    vec4 velocitySrc[];   // xyz = velocity, w = temperature
 };
 
 // 1 -> destination velocity
@@ -23,11 +23,25 @@ layout(std430, binding = 3) readonly buffer WallBuf {
 };
 
 uniform ivec3 u_GridSize;
+uniform float u_CellSize;
 uniform float u_Dt;
 
-// Force strengths
-uniform float u_GravityStrength;   // downward acceleration
-uniform float u_BuoyancyStrength;  // upward acceleration per unit smoke density
+uniform float u_GravityStrength;
+
+// Legacy density-based mode
+uniform float u_BuoyancyStrength;
+uniform float u_DensityLow;
+uniform float u_DensityHigh;
+
+// Heat-based mode
+uniform float u_TemperatureBuoyancyStrength;
+
+// 0 = legacy density-based buoyancy
+// 1 = temperature-based buoyancy
+uniform int u_BuoyancyMode;
+
+// baroclinic term controls
+uniform float u_BaroclinicStrength;
 
 int flatIdx(ivec3 c) {
     return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
@@ -46,28 +60,74 @@ void main() {
 
     int idx = flatIdx(c);
 
-    // Solid cells: keep velocity zeroed
+    int idxR = flatIdx(c + ivec3( 1,  0,  0));
+    int idxL = flatIdx(c + ivec3(-1,  0,  0));
+    int idxU = flatIdx(c + ivec3( 0,  1,  0));
+    int idxD = flatIdx(c + ivec3( 0, -1,  0));
+    int idxF = flatIdx(c + ivec3( 0,  0,  1));
+    int idxB = flatIdx(c + ivec3( 0,  0, -1));
+
     if (walls[idx] != 0) {
         velocityDst[idx] = vec4(0.0);
         return;
     }
 
-    vec3 vel = velocitySrc[idx].xyz;
+    vec4 oldState = velocitySrc[idx];
+    vec3 vel = oldState.xyz;
+    float temp = oldState.w;
     float density = max(smokeDensity[idx], 0.0);
 
-    // Net vertical acceleration:
-    // buoyancy pushes up, gravity pushes down
-    // Using metrics instead of temperature for now
-    float d0 = 0.5;
-    float d1 = 0.9;
-    float mid = 0.5 * (d0 + d1);
-    float halfWidth = 0.5 * (d1 - d0);
+    float ay = -u_GravityStrength;
 
-    float liftShape = min((density - d0) * (d1 - density),0);
+    if (u_BuoyancyMode == 0) {
+        // Legacy stylized density-based response:
+        // light + very dense can rise, middle tends to sink
+        float d0 = u_DensityLow;
+        float d1 = u_DensityHigh;
+        float liftShape = min((density - d0) * (d1 - density),0);
 
-    float ay = u_BuoyancyStrength * liftShape - u_GravityStrength;
+        ay += u_BuoyancyStrength * liftShape;
+    }
+    else {
+        // Heat-based buoyancy
+        float heat = max(temp, 0.0);
+        ay += u_TemperatureBuoyancyStrength * heat;
+    }
 
     vel.y += ay * u_Dt;
 
-    velocityDst[idx] = vec4(vel, 0.0);
+    // apply baroclinic torque
+    float invTwoH = 1.0 / (2.0 * u_CellSize);
+
+    float densityR = smokeDensity[idxR];
+    float densityL = smokeDensity[idxL];
+    float densityU = smokeDensity[idxU];
+    float densityD = smokeDensity[idxD];
+    float densityF = smokeDensity[idxF];
+    float densityB = smokeDensity[idxB];
+
+    float tempR = velocitySrc[idxR].w;
+    float tempL = velocitySrc[idxL].w;
+    float tempU = velocitySrc[idxU].w;
+    float tempD = velocitySrc[idxD].w;
+    float tempF = velocitySrc[idxF].w;
+    float tempB = velocitySrc[idxB].w;
+
+    vec3 gradDensity = vec3(
+        densityR - densityL,
+        densityU - densityD,
+        densityF - densityB
+    ) * invTwoH;
+
+    vec3 gradTemp = vec3(
+        tempR - tempL,
+        tempU - tempD,
+        tempF - tempB
+    ) * invTwoH;
+
+    vec3 baroclinic = cross(gradDensity, gradTemp);
+    
+    vel += u_BaroclinicStrength * baroclinic * u_Dt;
+
+    velocityDst[idx] = vec4(vel, temp);
 }

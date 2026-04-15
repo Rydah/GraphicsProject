@@ -18,6 +18,7 @@ add_executable(GraphicsProject
     src/SmokeSolver/AdvectSmoke.cpp
     src/SmokeSolver/AdvectVelocity.cpp
     src/SmokeSolver/ComputeDivergence.cpp
+    src/SmokeSolver/DiffuseSmoke.cpp
     src/SmokeSolver/PressureJacobi.cpp
     src/SmokeSolver/ProjectVelocity.cpp
     # Dear ImGui

@@ -22,6 +22,7 @@ void AdvectVelocity::iterate(const VoxelDomain& domain,
     shader_.setFloat("u_CellSize", domain.voxelSize);
     shader_.setVec3("u_BoundsMin", domain.boundsMin);
     shader_.setFloat("u_Dt", dt);
+    shader_.setFloat("u_CoolingRate", smokeCoolingRate);
 
     shader_.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
 

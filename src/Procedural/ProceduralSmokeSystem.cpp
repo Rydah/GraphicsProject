@@ -30,6 +30,7 @@ void ProceduralSmokeSystem::update(
     floodFillToSmoke_.injectAll(
         floodFill.currentBuffer(),
         floodFill.effectiveMaxDensity(),
+        floodFill.maxSeedValue,
         domain,
         smoke.getSrcDensity(),
         smoke.getDestDensity(),

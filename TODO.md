@@ -801,19 +801,20 @@ Critical: `GL_SHADER_STORAGE_BARRIER_BIT` between every GPU→GPU handoff (see b
   - **Turbulence:** vorticity confinement causes visible swirling rolls at the cloud boundary, matching the billowing behaviour in the reference video
   - **Verify:** seed grenade near a wall corner; smoke should bend around the corner and fill both sides over 2–3 seconds rather than linearly spreading
 
-- [ ] **Step 11 — Catmull-Rom Upsampler**
+- **Step 11 — Catmull-Rom Upsampler** *(implemented in `src/post/Upsampler.h` and integrated in render loop)*
   - `upsample.frag`: 4×4 Catmull-Rom kernel, weights formula above
   - Clamp transmittance channel to [0,1] after upsampling
   - `Upsampler::upsample(halfResTex, fullResFBO)`
   - **Verify:** Compare bilinear vs Catmull-Rom — cubic has sharper smoke edges
 
-- [ ] **Step 12 — Compositor + Sharpening**
+- **Step 12 — Compositor + Sharpening** *(implemented in `src/post/Compositor.h` and integrated in render loop)*
   - `composite.frag`:
     - Laplacian unsharp mask on smoke color before blend
     - `finalColor = scene * transmittance + smokeSharpened * (1 - transmittance)`
   - Debug modes via uniform int: 0=final, 1=smoke only, 2=density mask, 3=depth
   - Render to default framebuffer (id=0)
-  - `Compositor::composite(sceneColorTex, fullResTex, debugMode, quadVAO)`
+  - `Compositor::composite(sceneColorTex, fullResTex, depthTex, fsQuad)`
+  - API note: keep `debugMode` as compositor state and pass `FullscreenQuad` wrapper (`fsQuad`) instead of raw `quadVAO`; this is clearer/safer and has negligible runtime cost difference
   - **Verify:** Smoke composites naturally over scene, debug modes toggle correctly
 
 ### Phase 4: Debug + Integration

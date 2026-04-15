@@ -7,6 +7,7 @@ void SmokeSolver::init() {
     computeDivergence_.init();
     pressureJacobi_.init();
     projectVelocity_.init();
+    diffuseSmoke_.init();
 }
 
 void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
@@ -71,18 +72,28 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
     );
     smoke.swapVelocity();
 
-    // advect smoke (we can actually choose to advect the smoke or velocity first or later as it doesnt matter visually)
-    advectSmoke_.iterate(
+    // advect smoke
+    if (advectSmokeEnabled) {
+        advectSmoke_.iterate(
+            smoke.domain,
+            smoke.getSrcVelocity(),
+            smoke.getSrcDensity(),
+            smoke.getDestDensity(),
+            wallBuf,
+            dt
+        );
+        smoke.swapDensity();
+    }
+    
+    // diffuse smoke
+    diffuseSmoke_.iterate(
         smoke.domain,
-        smoke.getSrcVelocity(),
         smoke.getSrcDensity(),
         smoke.getDestDensity(),
         wallBuf,
         dt
     );
     smoke.swapDensity();
-    
-
 
 }
 
@@ -92,4 +103,5 @@ void SmokeSolver::destroy() {
     computeDivergence_.destroy();
     pressureJacobi_.destroy();
     projectVelocity_.destroy();
+    diffuseSmoke_.destroy();
 }

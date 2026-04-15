@@ -3,12 +3,16 @@ BUILD_DIR   := build
 SRC_DIR     := src
 INC_DIR     := includes
 LIB_DIR     := libs
+IMGUI_DIR   := $(INC_DIR)/imgui
 
 CXX         := g++
 CC          := gcc
 
 TARGET_BIN  := $(BUILD_DIR)/$(TARGET).exe
 
+# ------------------------------------------------------------------
+# Project sources
+# ------------------------------------------------------------------
 CPP_SOURCES := \
 	$(wildcard $(SRC_DIR)/*.cpp) \
 	$(wildcard $(SRC_DIR)/core/*.cpp) \
@@ -16,55 +20,68 @@ CPP_SOURCES := \
 	$(wildcard $(SRC_DIR)/Debugtest/*.cpp) \
 	$(wildcard $(SRC_DIR)/Procedural/*.cpp) \
 	$(wildcard $(SRC_DIR)/Rendering/*.cpp) \
+	$(wildcard $(SRC_DIR)/post/*.cpp) \
 	$(wildcard $(SRC_DIR)/SmokeSolver/*.cpp) \
 	$(wildcard $(SRC_DIR)/Voxel/*.cpp)
 
-C_SOURCES   := $(SRC_DIR)/glad.c
+C_SOURCES := \
+	$(SRC_DIR)/glad.c
 
-CPP_OBJECTS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(CPP_SOURCES))
-C_OBJECTS   := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
+# ------------------------------------------------------------------
+# Dear ImGui sources
+# ------------------------------------------------------------------
+IMGUI_SOURCES := \
+	$(IMGUI_DIR)/imgui.cpp \
+	$(IMGUI_DIR)/imgui_draw.cpp \
+	$(IMGUI_DIR)/imgui_tables.cpp \
+	$(IMGUI_DIR)/imgui_widgets.cpp \
+	$(IMGUI_DIR)/backends/imgui_impl_glfw.cpp \
+	$(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
+
+CPP_SOURCES += $(IMGUI_SOURCES)
+
+# ------------------------------------------------------------------
+# Object paths
+# This maps:
+#   src/foo.cpp                  -> build/src/foo.o
+#   includes/imgui/imgui.cpp     -> build/includes/imgui/imgui.o
+# ------------------------------------------------------------------
+CPP_OBJECTS := $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(CPP_SOURCES))
+C_OBJECTS   := $(patsubst %.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
 OBJECTS     := $(CPP_OBJECTS) $(C_OBJECTS)
 
-CXXFLAGS := -std=c++17 -Wall -Wextra -I$(SRC_DIR) -I$(INC_DIR)
-CFLAGS   := -Wall -Wextra -I$(SRC_DIR) -I$(INC_DIR)
+# ------------------------------------------------------------------
+# Include paths
+# -Iincludes/imgui is important because imgui backend headers include
+# "imgui.h" internally, not "imgui/imgui.h"
+# ------------------------------------------------------------------
+CXXFLAGS := -std=c++17 -Wall -Wextra -I$(SRC_DIR) -I$(INC_DIR) -I$(IMGUI_DIR)
+CFLAGS   := -Wall -Wextra -I$(SRC_DIR) -I$(INC_DIR) -I$(IMGUI_DIR)
 
-LDFLAGS  := -L$(LIB_DIR)
-LDLIBS   := -lglfw3 -lopengl32 -lgdi32
+LDFLAGS := -L$(LIB_DIR)
+LDLIBS  := -lglfw3 -lopengl32 -lgdi32
 
+# ------------------------------------------------------------------
+# Main targets
+# ------------------------------------------------------------------
 all: $(TARGET_BIN)
 
 $(TARGET_BIN): $(OBJECTS)
 	$(CXX) $(OBJECTS) -o $@ $(LDFLAGS) $(LDLIBS)
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR) $(BUILD_DIR)/core $(BUILD_DIR)/camera $(BUILD_DIR)/Debugtest $(BUILD_DIR)/Procedural $(BUILD_DIR)/Rendering $(BUILD_DIR)/SmokeSolver $(BUILD_DIR)/Voxel
+# ------------------------------------------------------------------
+# Compile C++ files from anywhere in the tree
+# ------------------------------------------------------------------
+$(BUILD_DIR)/%.o: %.cpp
+	@if not exist "$(subst /,\,$(dir $@))" mkdir "$(subst /,\,$(dir $@))"
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+# ------------------------------------------------------------------
+# Compile C files from anywhere in the tree
+# ------------------------------------------------------------------
+$(BUILD_DIR)/%.o: %.c
+	@if not exist "$(subst /,\,$(dir $@))" mkdir "$(subst /,\,$(dir $@))"
 	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR):
-	if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
-
-$(BUILD_DIR)/core:
-	if not exist $(BUILD_DIR)\core mkdir $(BUILD_DIR)\core
-
-$(BUILD_DIR)/camera:
-	if not exist $(BUILD_DIR)\camera mkdir $(BUILD_DIR)\camera
-
-$(BUILD_DIR)/Debugtest:
-	if not exist $(BUILD_DIR)\Debugtest mkdir $(BUILD_DIR)\Debugtest
-
-$(BUILD_DIR)/Procedural:
-	if not exist $(BUILD_DIR)\Procedural mkdir $(BUILD_DIR)\Procedural
-
-$(BUILD_DIR)/Rendering:
-	if not exist $(BUILD_DIR)\Rendering mkdir $(BUILD_DIR)\Rendering
-
-$(BUILD_DIR)/SmokeSolver:
-	if not exist $(BUILD_DIR)\SmokeSolver mkdir $(BUILD_DIR)\SmokeSolver
-
-$(BUILD_DIR)/Voxel:
-	if not exist $(BUILD_DIR)\Voxel mkdir $(BUILD_DIR)\Voxel
 
 clean:
 	if exist $(BUILD_DIR) rmdir /S /Q $(BUILD_DIR)
@@ -74,4 +91,9 @@ rebuild: clean all
 run: all
 	$(TARGET_BIN)
 
-.PHONY: all clean rebuild run
+print:
+	@echo CPP_SOURCES=$(CPP_SOURCES)
+	@echo C_SOURCES=$(C_SOURCES)
+	@echo OBJECTS=$(OBJECTS)
+
+.PHONY: all clean rebuild run print

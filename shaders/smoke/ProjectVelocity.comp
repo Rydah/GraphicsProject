@@ -98,5 +98,7 @@ void main()
     if (!isFluidCell(front) && vCurr.z > 0.0) vCurr.z = 0.1;
     if (!isFluidCell(back)  && vCurr.z < 0.0) vCurr.z = 0.0;
 
-    velocityDest[idx] = vec4(vCurr, 0.0);
+    float temp = velocitySrc[idx].w;
+
+    velocityDest[idx] = vec4(vCurr, temp);
 }
