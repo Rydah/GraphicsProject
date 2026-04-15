@@ -879,10 +879,6 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             }
 
             ImGui::SliderFloat("Sharpen Strength", &compositor.sharpenStrength, 0.0f, 2.0f);
-            ImGui::RadioButton("Final##debug",          &compositor.debugMode, Compositor::DEBUG_FINAL);      ImGui::SameLine();
-            ImGui::RadioButton("Smoke Only##debug",     &compositor.debugMode, Compositor::DEBUG_SMOKE_ONLY); ImGui::SameLine();
-            ImGui::RadioButton("Density##debug",        &compositor.debugMode, Compositor::DEBUG_DENSITY);    ImGui::SameLine();
-            ImGui::RadioButton("Depth##debug",          &compositor.debugMode, Compositor::DEBUG_DEPTH);
         }
 
         ImGui::End();
