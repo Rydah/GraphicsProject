@@ -333,13 +333,17 @@ static void rebuildArena(
 // Helper: (re)build the scene color FBO at the given resolution.
 // Called once at startup and whenever the window is resized.
 //---------------------------------------------------------------------
-static void rebuildSceneFBO(Framebuffer& fbo, Texture2D& tex, int w, int h)
+static void rebuildSceneFBO(Framebuffer& fbo,
+                            Texture2D& colorTex,
+                            const Texture2D& depthTex,
+                            int w, int h)
 {
-    tex.destroy();
+    colorTex.destroy();
     fbo.destroy();
-    tex.create(w, h, GL_RGBA8);
+    colorTex.create(w, h, GL_RGBA8);
     fbo.create();
-    fbo.attachColor(tex.ID);
+    fbo.attachColor(colorTex.ID);
+    fbo.attachDepth(depthTex.ID);
     if (!fbo.isComplete())
         std::cerr << "[SceneFBO] Framebuffer incomplete after rebuild!\n";
 }
@@ -453,7 +457,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     // render opaque geometry into it before compositing.
     Framebuffer sceneFBO;
     Texture2D   sceneColorTex;
-    rebuildSceneFBO(sceneFBO, sceneColorTex, (int)winWidth, (int)winHeight);
+    rebuildSceneFBO(sceneFBO, sceneColorTex, depthPass.depthTex, (int)winWidth, (int)winHeight);
 
     g_voxelizer = &voxelizer;
     g_floodFill = &floodFill;
@@ -515,7 +519,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             if ((int)winWidth  != sceneColorTex.width ||
                 (int)winHeight != sceneColorTex.height)
             {
-                rebuildSceneFBO(sceneFBO, sceneColorTex, (int)winWidth, (int)winHeight);
+                rebuildSceneFBO(sceneFBO, sceneColorTex, depthPass.depthTex, (int)winWidth, (int)winHeight);
             }
         }
 
