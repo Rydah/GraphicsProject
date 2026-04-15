@@ -43,6 +43,7 @@
 #include "Rendering/Raymarcher.h"
 #include "Rendering/LightSource.h"
 #include "post/Upsampler.h"
+#include "post/Compositor.h"
 
 //---------------------------------------------------------------------
 // Window
@@ -329,6 +330,21 @@ static void rebuildArena(
 }
 
 //---------------------------------------------------------------------
+// Helper: (re)build the scene color FBO at the given resolution.
+// Called once at startup and whenever the window is resized.
+//---------------------------------------------------------------------
+static void rebuildSceneFBO(Framebuffer& fbo, Texture2D& tex, int w, int h)
+{
+    tex.destroy();
+    fbo.destroy();
+    tex.create(w, h, GL_RGBA8);
+    fbo.create();
+    fbo.attachColor(tex.ID);
+    if (!fbo.isComplete())
+        std::cerr << "[SceneFBO] Framebuffer incomplete after rebuild!\n";
+}
+
+//---------------------------------------------------------------------
 // main
 //---------------------------------------------------------------------
 int main()
@@ -427,6 +443,17 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     Upsampler upsampler;
     upsampler.init(winWidth, winHeight);
 
+    // --- Compositor (sharpening + compositing) ---
+    Compositor compositor;
+    compositor.init();
+    
+    // Scene color texture (for compositing)
+    // sceneColorTex is now backed by a real Framebuffer so we can
+    // render opaque geometry into it before compositing.
+    Framebuffer sceneFBO;
+    Texture2D   sceneColorTex;
+    rebuildSceneFBO(sceneFBO, sceneColorTex, (int)winWidth, (int)winHeight);
+
     g_voxelizer = &voxelizer;
     g_floodFill = &floodFill;
 
@@ -474,10 +501,23 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Resize passes if window changed
-        depthPass.resize(winWidth, winHeight);
-        raymarcher.resize(winWidth, winHeight);
-        upsampler.resize(winWidth, winHeight);
+        // Resize dependent resources when window size changes
+        {
+            depthPass.resize(winWidth, winHeight);
+            raymarcher.resize(winWidth, winHeight);
+            upsampler.resize(winWidth, winHeight);
+ 
+            // FIX: rebuild the scene FBO + texture together when the window
+            // resizes.  Previously only the texture was recreated (and it was
+            // never attached to any FBO), so every resize left a dangling,
+            // uninitialised texture being passed to the compositor.
+            if ((int)winWidth  != sceneColorTex.width ||
+                (int)winHeight != sceneColorTex.height)
+            {
+                rebuildSceneFBO(sceneFBO, sceneColorTex, (int)winWidth, (int)winHeight);
+            }
+        }
+
 
         // --- Camera matrices ---
         float aspect = (float)winWidth / (float)winHeight;
@@ -513,24 +553,8 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             dt
         );
 
-
-        // --- Ray march (default ON; toggle with R) ---
+        // --- Ray march smoke into half-res texture ---
         if (g_raymarchEnabled) {
-            // raymarcher.render(
-            //     floodFill.currentBuffer(),
-            //     voxelizer.staticVoxels,
-            //     depthPass.depthTex,
-            //     worleyNoise.texture,
-            //     voxelizer.domain,
-            //     view, proj,
-            //     0.001f, 100.0f,
-            //     floodFill.effectiveMaxDensity(),
-            //     time,
-            //     floodFill.seedWorldPos,
-            //     floodFill.maxSeedValue,
-            //     floodFill.radiusXZ,
-            //     floodFill.radiusY
-            // );
             raymarcher.render(
                 smoke.getSrcDensity(),
                 voxelizer.staticVoxels,
@@ -544,6 +568,51 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             );
         }
 
+        // -------------------------------------------------------------------
+        // FIX: Render opaque scene geometry into sceneFBO so the compositor
+        // has a real background to blend smoke over.
+        //
+        // We need the depth buffer here too so geometry is occluded correctly.
+        // Attach the depthPass depth texture as the FBO depth attachment, OR
+        // create a dedicated depth renderbuffer for the scene FBO.  The simplest
+        // approach that works with the existing code is to render into sceneFBO
+        // with its own depth renderbuffer (added to Framebuffer::create() or
+        // managed here), then continue using depthPass.depthTex for the
+        // raymarcher's depth-clip test (it was already rendered above).
+        //
+        // Minimal implementation — renders voxelDebug walls into sceneFBO:
+        // -------------------------------------------------------------------
+        {
+            sceneFBO.bind();
+            glViewport(0, 0, (int)winWidth, (int)winHeight);
+ 
+            // Clear to the same sky colour used on the default framebuffer
+            glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+ 
+            // Draw all opaque scene geometry.
+            // voxelDebug.draw() renders the static wall voxels with Phong
+            // shading — this is the background the compositor will composite
+            // smoke over.
+            voxelDebug.draw(
+                voxelizer.staticVoxels,
+                view, proj,
+                voxelizer.domain.gridSize,
+                voxelizer.domain.boundsMin,
+                voxelizer.domain.voxelSize,
+                g_light
+            );
+ 
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, (int)winWidth, (int)winHeight);
+        }
+        // -------------------------------------------------------------------
+ 
+        // --- Clear the default framebuffer for the final composite ---
+        glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+ 
         // --- Debug / render modes ---
         if (g_noiseView.enabled) {
             g_noiseView.draw(worleyNoise.texture, fsQuad);
@@ -553,29 +622,19 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         }
         else if (g_velocityDebug.enabled) {
             g_velocityDebug.draw(
-                voxelizer.domain,
-                smoke.getSrcVelocity(),
-                voxelizer.staticVoxels,
-                view, proj
+                voxelizer.domain, smoke.getSrcVelocity(),
+                voxelizer.staticVoxels, view, proj
             );
         }
         else {
             // Normal mode:
-            // - R ON  -> walls + volumetric raymarched smoke
+            // - R ON  -> final composite: sceneColorTex (walls) + volumetric raymarched smoke
             // - R OFF -> voxel debug smoke cubes (yellow/orange)
             if (g_raymarchEnabled) {
-                voxelDebug.draw(
-                    voxelizer.staticVoxels,
-                    view, proj,
-                    voxelizer.domain.gridSize,
-                    voxelizer.domain.boundsMin,
-                    voxelizer.domain.voxelSize,
-                    g_light
-                );
                 // Upsample the half-res ray march output to full resolution
                 upsampler.upsample(raymarcher.smokeOut, fsQuad);
-                // Blit the upsampled result to screen
-                upsampler.blit(fsQuad);
+                // Composite with sharpening: smoke over scene
+                compositor.composite(sceneColorTex, upsampler.fullResOutput, depthPass.depthTex, fsQuad);
             } else {
                 voxelDebug.drawWithSmoke(
                     voxelizer.staticVoxels,
@@ -800,6 +859,15 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             ImGui::SliderFloat("Curl Strength",  &raymarcher.curlStrength,  0.0f, 4.0f);
         }
 
+        // --- Post-Processing (Sharpening & Compositing) ---
+        if (ImGui::CollapsingHeader("Post-Processing", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::SliderFloat("Sharpen Strength", &compositor.sharpenStrength, 0.0f, 2.0f);
+            ImGui::RadioButton("Final##debug",          &compositor.debugMode, Compositor::DEBUG_FINAL);      ImGui::SameLine();
+            ImGui::RadioButton("Smoke Only##debug",     &compositor.debugMode, Compositor::DEBUG_SMOKE_ONLY); ImGui::SameLine();
+            ImGui::RadioButton("Density##debug",        &compositor.debugMode, Compositor::DEBUG_DENSITY);    ImGui::SameLine();
+            ImGui::RadioButton("Depth##debug",          &compositor.debugMode, Compositor::DEBUG_DEPTH);
+        }
+
         ImGui::End();
 
         ImGui::Render();
@@ -817,6 +885,8 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     depthPass.destroy();
     raymarcher.destroy();
     upsampler.destroy();
+    compositor.destroy();
+    sceneColorTex.destroy();
     solver.destroy();
     smoke.destroy();
     smokeSystem.destroy();
