@@ -20,6 +20,7 @@ CPP_SOURCES := \
 	$(wildcard $(SRC_DIR)/Debugtest/*.cpp) \
 	$(wildcard $(SRC_DIR)/Procedural/*.cpp) \
 	$(wildcard $(SRC_DIR)/Rendering/*.cpp) \
+	$(wildcard $(SRC_DIR)/post/*.cpp) \
 	$(wildcard $(SRC_DIR)/SmokeSolver/*.cpp) \
 	$(wildcard $(SRC_DIR)/Voxel/*.cpp)
 

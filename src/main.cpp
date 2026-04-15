@@ -42,6 +42,7 @@
 #include "core/SceneDepthPass.h"
 #include "Rendering/Raymarcher.h"
 #include "Rendering/LightSource.h"
+#include "post/Upsampler.h"
 
 //---------------------------------------------------------------------
 // Window
@@ -422,6 +423,10 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     Raymarcher raymarcher;
     raymarcher.init(winWidth, winHeight);
 
+    // --- Upsampler (Catmull-Rom bicubic) ---
+    Upsampler upsampler;
+    upsampler.init(winWidth, winHeight);
+
     g_voxelizer = &voxelizer;
     g_floodFill = &floodFill;
 
@@ -472,6 +477,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
         // Resize passes if window changed
         depthPass.resize(winWidth, winHeight);
         raymarcher.resize(winWidth, winHeight);
+        upsampler.resize(winWidth, winHeight);
 
         // --- Camera matrices ---
         float aspect = (float)winWidth / (float)winHeight;
@@ -566,7 +572,10 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
                     voxelizer.domain.voxelSize,
                     g_light
                 );
-                raymarcher.blit(fsQuad);
+                // Upsample the half-res ray march output to full resolution
+                upsampler.upsample(raymarcher.smokeOut, fsQuad);
+                // Blit the upsampled result to screen
+                upsampler.blit(fsQuad);
             } else {
                 voxelDebug.drawWithSmoke(
                     voxelizer.staticVoxels,
@@ -807,6 +816,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     g_light.destroyMarker();
     depthPass.destroy();
     raymarcher.destroy();
+    upsampler.destroy();
     solver.destroy();
     smoke.destroy();
     smokeSystem.destroy();
