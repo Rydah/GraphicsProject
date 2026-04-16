@@ -158,7 +158,7 @@ void main() {
                 }
             }
             if (los) {
-                vel = normalize(toVacuum) * u_VacuumStrength;
+                vel += normalize(toVacuum) * u_VacuumStrength * u_Dt;
             }
         }
     }
