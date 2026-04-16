@@ -542,7 +542,7 @@ The ray is clipped against the scene depth buffer (reconstructed from a depth-on
 | `sigmaA` (absorption) | `0.8` | More light absorbed; smoke looks dark grey and thick | Translucent smoke; light passes through |
 | `g` (HG asymmetry) | `0.5` | Strong forward-scatter lobe; bright when backlit | Approaches isotropic; no view-angle brightness change |
 | `phaseBlend` | `0.5` | Shifts toward Rayleigh (even, symmetric brightness) | Shifts toward pure HG (directional forward scatter) |
-| `noiseScale` | `1.3` | Higher noise frequency; smaller fragmented puffs | Larger puffs; smoke looks like a single smooth mass |
+| `noiseScale` | `2.0` | Higher noise frequency; smaller fragmented puffs | Larger puffs; smoke looks like a single smooth mass |
 | `noiseStrength` | `0.85` | Deep erosion; holes carved into the cloud | Smooth, barely-eroded cloud |
 | `hazeFloor` | `0.0` | Minimum density prevents full erosion at boundary | At 0.0 noise cuts to zero, creating visible swiss-cheese holes |
 | `curlStrength` | `1.0` | More swirling warp displacement at boundaries | Flat, undisplaced cloud boundary |
@@ -553,7 +553,7 @@ The ray is clipped against the scene depth buffer (reconstructed from a depth-on
 
 **`sigmaS = 0.5` and `sigmaA = 0.8`** were tuned together. The higher absorption-to-scattering ratio ($\sigma_a > \sigma_s$) produces dark grey smoke (more light absorbed than scattered back to the camera) rather than a bright milky-white cloud. Increasing `sigmaS` without increasing `sigmaA` would produce unrealistically bright smoke.
 
-**`noiseScale = 1.3`** was reduced from the previous default of 3.2. At 3.2 the noise frequency produced visibly "lumpy" texture resembling a textured sphere rather than billowing smoke. At 1.3 the puffs are large enough to read as distinct volumetric lobes.
+**`noiseScale = 2.0`** was reduced from the previous default of 3.2. At 3.2 the noise frequency produced visibly "lumpy" texture resembling a textured sphere rather than billowing smoke. At 2.0 the puffs are large enough to read as distinct volumetric lobes.
 
 **`hazeFloor = 0.0`** allows full noise erosion at the smoke boundary. At zero, the noise can carve fully transparent holes through the cloud edge, giving a fragmented appearance; raising this value suppresses that erosion by maintaining a minimum base density at all points.
 
