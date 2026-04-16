@@ -7,6 +7,10 @@
 
 class PressureJacobi {
     public:
+    int       vacuumActive   = 0;
+    glm::vec3 vacuumWorldPos = glm::vec3(0.0f);
+    float     vacuumPressure = -5.0f;
+
     void init();
     void iterate(const VoxelDomain& domain,
                const SSBOBuffer& srcPressureBuf,

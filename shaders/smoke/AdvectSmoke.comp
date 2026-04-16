@@ -134,14 +134,15 @@ void main()
     // semi-Lagrangian backtrace
     vec3 prevWorldPos = worldPos - vel * u_Dt;
 
-    // Vacuum suction: shift backtrace away from vacuum so this voxel samples
-    // density from further out — equivalent to smoke moving inward toward vacuum.
+    // Vacuum suction: 1/r^2 backtrace shift with no hard cutoff — true singularity.
+    // u_VacuumRadius is the half-strength distance: at dist=radius falloff=0.5,
+    // at 2*radius falloff=0.2, etc. Effect tapers gradually across the whole domain.
     if (u_VacuumActive == 1) {
         vec3 awayFromVacuum = worldPos - u_VacuumWorldPos;
         float dist = length(awayFromVacuum);
-        if (dist > 1e-4 && dist < u_VacuumRadius) {
-            float t       = dist / u_VacuumRadius;       // 0=center, 1=edge
-            float falloff = (1.0 - t) * (1.0 - t);       // quadratic, strongest at center
+        if (dist > 1e-4) {
+            float r = dist / u_VacuumRadius;          // normalised distance
+            float falloff = 1.0 / (1.0 + r * r);     // 1/r^2, max 1 at center
             prevWorldPos += normalize(awayFromVacuum) * u_VacuumStrength * falloff * u_Dt;
         }
     }

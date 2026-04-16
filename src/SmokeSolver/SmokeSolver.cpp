@@ -49,7 +49,11 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
         smoke.divergence
     );
 
-    // pressure solve
+    // pressure solve — sync vacuum sink so each Jacobi iteration injects negative pressure
+    pressureJacobi_.vacuumActive   = applyForces_.vacuum.active ? 1 : 0;
+    pressureJacobi_.vacuumWorldPos = applyForces_.vacuum.worldPos;
+    pressureJacobi_.vacuumPressure = applyForces_.vacuum.pressure;
+
     for (int i=0; i < pressureIterations; i++) {
         pressureJacobi_.iterate(
             smoke.domain,

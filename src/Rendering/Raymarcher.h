@@ -39,7 +39,7 @@ public:
     float edgeFadeWidth  = 0.3f;
     float curlStrength   = 1.0f;
     float noiseStrength  = 0.85f;
-    float noiseScale     = 1.3f;
+    float noiseScale     = 2.0f;
     float hazeFloor      = 0.0f;   // 0 = many holes, 1 = smooth blob
     // Internal raymarch render scale (1.0 = full-res, 0.5 = half-res, 0.25 = quarter-res).
     float resolutionScale = 0.5f;

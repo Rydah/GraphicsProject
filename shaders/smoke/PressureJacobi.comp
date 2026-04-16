@@ -10,6 +10,13 @@ layout(std430, binding = 3) writeonly buffer PressureDest { float pressureDest[]
 uniform ivec3 u_GridSize;
 uniform float u_CellSize;
 
+// Vacuum sink: force a large negative pressure here each iteration (Dirichlet BC)
+uniform int   u_VacuumActive;
+uniform vec3  u_VacuumWorldPos;
+uniform float u_VacuumPressure;
+uniform vec3  u_BoundsMin;
+uniform float u_VoxelSize;
+
 int flatIdx(ivec3 c) {
     return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
 }
@@ -71,6 +78,17 @@ void main() {
     float h2 = u_CellSize * u_CellSize;
 
     float weightSOR = 1.0; // This has issues when changing it anything other than 1... (I think the implementation i have for this is wrong?)
+
+    // Vacuum sink: override this voxel with large negative pressure (Dirichlet BC).
+    // ProjectVelocity reads grad(P), so neighbors of the vacuum voxel get
+    // v -= grad(P) = v + large_inward_component automatically.
+    if (u_VacuumActive == 1) {
+        ivec3 vacGrid = ivec3(floor((u_VacuumWorldPos - u_BoundsMin) / u_VoxelSize));
+        if (length(vec3(coord - vacGrid)) < 1.5) {
+            pressureDest[idx] = u_VacuumPressure;
+            return;
+        }
+    }
 
     float pNew = (pL + pR + pD + pU + pB + pF - div * h2) / 6.0;
     pressureDest[idx] = pC + (pNew - pC) * weightSOR;

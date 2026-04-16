@@ -145,7 +145,7 @@ void main() {
         float dist    = length(toVacuum);
         if (dist > 1e-4 && dist < u_VacuumRadius) {
             float t       = dist / u_VacuumRadius;       // 0=center, 1=edge
-            float falloff = (1.0 - t) * (1.0 - t);       // quadratic, smooth to 0 at edge
+            float falloff = sqrt(1.0 - t);               // square-root: gentle near core, sustained at range
             vel += normalize(toVacuum) * u_VacuumStrength * falloff * u_Dt;
         }
     }
