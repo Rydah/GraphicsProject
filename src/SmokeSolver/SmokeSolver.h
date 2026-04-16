@@ -86,6 +86,14 @@ public:
         return applyForces_.BaroclinicStrength;
     }
 
+    void activateVacuum(glm::vec3 worldPos) {
+        applyForces_.activateVacuum(worldPos);
+    }
+
+    ApplyForces::VacuumState& vacuum() {
+        return applyForces_.vacuum;
+    }
+
     // Sets Smoke falloff (0.0 - 1.0f)
     void setSmokeFallOff(float smokeFallOff) {
         advectSmoke_.smokeFallOff = smokeFallOff;

@@ -43,6 +43,16 @@ uniform int u_BuoyancyMode;
 // baroclinic term controls
 uniform float u_BaroclinicStrength;
 
+// World-space reconstruction (mirrors AdvectSmoke.comp convention)
+uniform vec3  u_BoundsMin;
+uniform float u_VoxelSize;
+
+// Vacuum force (Shift+RClick)
+uniform int   u_VacuumActive;
+uniform vec3  u_VacuumWorldPos;
+uniform float u_VacuumStrength;
+uniform float u_VacuumRadius;
+
 int flatIdx(ivec3 c) {
     return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
 }
@@ -128,6 +138,17 @@ void main() {
     vec3 baroclinic = cross(gradDensity, gradTemp);
     
     vel += u_BaroclinicStrength * baroclinic * u_Dt;
+
+    if (u_VacuumActive == 1) {
+        vec3 worldPos = u_BoundsMin + (vec3(c) + 0.5) * u_VoxelSize;
+        vec3 toVacuum = u_VacuumWorldPos - worldPos;
+        float dist    = length(toVacuum);
+        if (dist > 1e-4 && dist < u_VacuumRadius) {
+            float t       = dist / u_VacuumRadius;       // 0=center, 1=edge
+            float falloff = (1.0 - t) * (1.0 - t);       // quadratic, smooth to 0 at edge
+            vel += normalize(toVacuum) * u_VacuumStrength * falloff * u_Dt;
+        }
+    }
 
     velocityDst[idx] = vec4(vel, temp);
 }

@@ -26,6 +26,10 @@ void AdvectSmoke::iterate(const VoxelDomain& domain,
     shader_.setFloat("u_FallOff", smokeFallOff);
     shader_.setVec3("u_BoundsMin", domain.boundsMin);
     shader_.setFloat("u_Dt", dt);
+    shader_.setInt  ("u_VacuumActive",   vacuumActive);
+    shader_.setVec3 ("u_VacuumWorldPos", vacuumWorldPos);
+    shader_.setFloat("u_VacuumStrength", vacuumStrength);
+    shader_.setFloat("u_VacuumRadius",   vacuumRadius);
 
     shader_.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
 

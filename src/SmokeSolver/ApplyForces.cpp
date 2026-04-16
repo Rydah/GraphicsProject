@@ -30,6 +30,23 @@ void ApplyForces::dispatch(
     forceCS.setFloat("u_DensityHigh", densityHigh);
     forceCS.setFloat("u_BaroclinicStrength", BaroclinicStrength);
 
+    // Tick vacuum timer
+    if (vacuum.active) {
+        vacuum.elapsed += dt;
+        if (vacuum.elapsed >= vacuum.duration) {
+            vacuum.active  = false;
+            vacuum.elapsed = 0.0f;
+        }
+    }
+
+    // Upload vacuum uniforms (always; shader gates on u_VacuumActive)
+    forceCS.setInt  ("u_VacuumActive",   vacuum.active ? 1 : 0);
+    forceCS.setVec3 ("u_VacuumWorldPos", vacuum.worldPos);
+    forceCS.setFloat("u_VacuumStrength", vacuum.strength);
+    forceCS.setFloat("u_VacuumRadius",   vacuum.radius);
+    forceCS.setVec3 ("u_BoundsMin",      domain.boundsMin);
+    forceCS.setFloat("u_VoxelSize",      domain.voxelSize);
+
     forceCS.dispatch(domain.gridSize.x, domain.gridSize.y, domain.gridSize.z);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }

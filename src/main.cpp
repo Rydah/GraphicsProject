@@ -57,6 +57,7 @@ static unsigned int winHeight = 600;
 static OrbitCamera      g_camera;
 static Voxelizer*       g_voxelizer   = nullptr;
 static VoxelFloodFill*  g_floodFill   = nullptr;
+static SmokeSolver*     g_solver      = nullptr;
 static NoiseDebugView    g_noiseView;
 static VelocityDebugView g_velocityDebug;
 static DepthDebugView    g_depthDebug;
@@ -163,7 +164,7 @@ static void key_callback(GLFWwindow* window, int key, int /*scan*/, int action, 
 
 }
 
-static void mouse_button_callback(GLFWwindow* window, int button, int action, int) {
+static void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     g_camera.onMouseButton(button, action);
 
     // Right click: seed smoke at clicked point in the voxel domain.
@@ -199,40 +200,45 @@ static void mouse_button_callback(GLFWwindow* window, int button, int action, in
         float step = glm::max(domain.voxelSize * 0.5f, 1e-4f);
         int maxSteps = glm::clamp((int)glm::ceil((tExit - t) / step) + 2, 1, 4096);
 
-        // March through air, track the last air voxel before a surface.
-        // Skip any solid voxels at the ray entry (outer shell), then seed
-        // at the last air voxel before the ray hits an interior wall or floor.
-        glm::ivec3 lastAirVoxel(-1);
-        bool inAir = false;
-        bool seeded = false;
+        // Vacuum: place at the midpoint of the ray through the AABB interior.
+        // This lands in the smoke volume regardless of wall proximity.
+        if ((mods & GLFW_MOD_SHIFT) && g_solver) {
+            float tMid = t + (tExit - t) * 0.5f;
+            glm::vec3 vacPos = rayOrigin + rayDir * tMid;
+            g_solver->activateVacuum(vacPos);
+            std::cout << "[Vacuum] Activated at ("
+                      << vacPos.x << ", " << vacPos.y << ", " << vacPos.z << ")\n";
+        } else {
+            // Normal seed: march to find the last air voxel before a wall surface.
+            glm::ivec3 lastAirVoxel(-1);
+            bool inAir = false;
+            bool seeded = false;
 
-        for (int i = 0; i < maxSteps; ++i) {
-            glm::vec3 worldPos = rayOrigin + rayDir * t;
-            glm::ivec3 c = domain.worldToGrid(worldPos);
-            int idx = domain.flatten(c);
+            for (int i = 0; i < maxSteps; ++i) {
+                glm::vec3 worldPos = rayOrigin + rayDir * t;
+                glm::ivec3 c = domain.worldToGrid(worldPos);
+                int idx = domain.flatten(c);
 
-            if (idx >= 0 && idx < (int)g_wallVoxelCache.size()) {
-                int voxVal = g_wallVoxelCache[idx];
-                if (voxVal == 0) {
-                    // Air - keep advancing and remember this voxel
-                    inAir = true;
-                    lastAirVoxel = c;
-                } else if (inAir) {
-                    // Hit a solid surface after passing through air - seed here
-                    glm::vec3 seedPos = domain.gridToWorldCenter(glm::vec3(lastAirVoxel));
-                    g_floodFill->seed(seedPos, domain.gridSize, domain.boundsMin, domain.voxelSize);
-                    seeded = true;
-                    break;
+                if (idx >= 0 && idx < (int)g_wallVoxelCache.size()) {
+                    int voxVal = g_wallVoxelCache[idx];
+                    if (voxVal == 0) {
+                        inAir = true;
+                        lastAirVoxel = c;
+                    } else if (inAir) {
+                        glm::vec3 seedPos = domain.gridToWorldCenter(glm::vec3(lastAirVoxel));
+                        g_floodFill->seed(seedPos, domain.gridSize, domain.boundsMin, domain.voxelSize);
+                        seeded = true;
+                        break;
+                    }
                 }
-                // else: still traversing outer shell before entering interior - skip
+
+                t += step;
+                if (t > tExit) break;
             }
 
-            t += step;
-            if (t > tExit) break;
-        }
-
-        if (!seeded) {
-            std::cout << "Click hit no valid surface for smoke seed.\n";
+            if (!seeded) {
+                std::cout << "Click hit no valid surface for smoke seed.\n";
+            }
         }
     }
 }
@@ -468,6 +474,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
     SmokeSolver solver;
     solver.init();
+    g_solver = &solver;
 
     // --- PSmokeSys ---
     ProceduralSmokeSystem smokeSystem;
@@ -865,6 +872,23 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             }
         }
 
+        // --- Vacuum ---
+        if (ImGui::CollapsingHeader("Vacuum") && g_solver) {
+            auto& vac = g_solver->vacuum();
+            if (vac.active) {
+                float remaining = vac.duration - vac.elapsed;
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.1f, 1.0f),
+                                   "ACTIVE  (%.1fs remaining)", remaining);
+            } else {
+                ImGui::TextDisabled("Inactive  (Shift+RClick to activate)");
+            }
+            ImGui::SliderFloat("Duration (s)",    &vac.duration,  0.5f, 10.0f);
+            ImGui::SliderFloat("Strength",        &vac.strength,  0.0f, 30.0f);
+            ImGui::SliderFloat("Radius (world)",  &vac.radius,    0.1f,  5.0f);
+            if (vac.active && ImGui::Button("Cancel Vacuum"))
+                vac.active = false;
+        }
+
         // --- Phase Function ---
         if (ImGui::CollapsingHeader("Phase Function")) {
             ImGui::SliderFloat("HG/Rayleigh Blend", &raymarcher.phaseBlend, 0.0f, 1.0f);
@@ -909,6 +933,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
     // --- Cleanup ---
     g_voxelizer  = nullptr;
     g_floodFill  = nullptr;
+    g_solver     = nullptr;
     g_depthPass  = nullptr;
 
     g_light.destroyMarker();

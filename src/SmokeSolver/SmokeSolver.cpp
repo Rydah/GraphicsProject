@@ -72,7 +72,13 @@ void SmokeSolver::step(SmokeField& smoke, const SSBOBuffer& wallBuf, float dt) {
     );
     smoke.swapVelocity();
 
-    // advect smoke
+    // advect smoke — sync vacuum state so the suction backtrace displacement
+    // is applied here (bypasses pressure projection which would cancel it)
+    advectSmoke_.vacuumActive   = applyForces_.vacuum.active ? 1 : 0;
+    advectSmoke_.vacuumWorldPos = applyForces_.vacuum.worldPos;
+    advectSmoke_.vacuumStrength = applyForces_.vacuum.strength;
+    advectSmoke_.vacuumRadius   = applyForces_.vacuum.radius;
+
     if (advectSmokeEnabled) {
         advectSmoke_.iterate(
             smoke.domain,

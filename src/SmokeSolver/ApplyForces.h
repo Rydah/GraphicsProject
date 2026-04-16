@@ -17,6 +17,21 @@ public:
     // heat based implementation
     float tempBounyancyStrength = 1.0f;
 
+    struct VacuumState {
+        bool      active   = false;
+        float     elapsed  = 0.0f;
+        float     duration = 3.0f;    // seconds before auto-dissipation
+        float     strength = 20.0f;   // inward acceleration (world-units/s^2)
+        float     radius   = 3.5f;    // world-space influence radius
+        glm::vec3 worldPos = glm::vec3(0.0f);
+    } vacuum;
+
+    void activateVacuum(glm::vec3 pos) {
+        vacuum.worldPos = pos;
+        vacuum.elapsed  = 0.0f;
+        vacuum.active   = true;
+    }
+
     void init();
     void dispatch(
                 const VoxelDomain& domain,

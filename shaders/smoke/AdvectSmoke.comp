@@ -28,6 +28,12 @@ uniform float u_CellSize;
 uniform float u_FallOff;
 uniform float u_Dt;
 
+// Vacuum suction (Shift+RClick)
+uniform int   u_VacuumActive;
+uniform vec3  u_VacuumWorldPos;
+uniform float u_VacuumStrength;
+uniform float u_VacuumRadius;
+
 int flatIdx(ivec3 c)
 {
     return c.x + c.y * u_GridSize.x + c.z * u_GridSize.x * u_GridSize.y;
@@ -127,6 +133,18 @@ void main()
 
     // semi-Lagrangian backtrace
     vec3 prevWorldPos = worldPos - vel * u_Dt;
+
+    // Vacuum suction: shift backtrace away from vacuum so this voxel samples
+    // density from further out — equivalent to smoke moving inward toward vacuum.
+    if (u_VacuumActive == 1) {
+        vec3 awayFromVacuum = worldPos - u_VacuumWorldPos;
+        float dist = length(awayFromVacuum);
+        if (dist > 1e-4 && dist < u_VacuumRadius) {
+            float t       = dist / u_VacuumRadius;       // 0=center, 1=edge
+            float falloff = (1.0 - t) * (1.0 - t);       // quadratic, strongest at center
+            prevWorldPos += normalize(awayFromVacuum) * u_VacuumStrength * falloff * u_Dt;
+        }
+    }
 
     // trilinear sample previous smoke field
     float advectedSmoke = sampleSmokeTrilinear(prevWorldPos);
