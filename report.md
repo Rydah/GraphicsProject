@@ -571,6 +571,8 @@ The flood fill provides a geometrically correct density source but produces pure
 
 The velocity field and temperature are co-located in a single `vec4` SSBO where `.xyz` holds the 3D velocity vector and `.w` holds temperature. Packing them together means both are advected in a single semi-Lagrangian backtrace shader, ensuring temperature is transported exactly with the smoke rather than diffusing independently.
 
+The physical effects modelled here — buoyancy-driven column rise, pressure-mediated wall deflection, and vortex formation at density interfaces — correspond closely to the buoyancy-dominated smoke dynamics studied in room-scale enclosed environments (McGrattan, Baum, & Rehm, 1999). The GPU solver is adapted from Lague's (2023) 2D grid-based incompressible Navier-Stokes simulation, extended here to three spatial dimensions. The pressure Poisson equation is solved via Jacobi iteration (Harris, 2004) rather than Gauss-Seidel relaxation: each Jacobi step reads only from the previous iteration's buffer, enabling fully-parallel GPU dispatch without sequential update dependencies.
+
 #### 3.4.2 Temperature and Buoyancy
 
 **Temperature injection:** The flood fill injects temperature into the `.w` channel of the velocity field alongside density. The inject strength of 30.0 is a dimensionless scale chosen so that a freshly-detonated voxel carries enough heat to produce a clearly visible buoyant column rise within 1–2 seconds.
@@ -629,11 +631,13 @@ $$\nabla \cdot \mathbf{V}[i] = \frac{(V_x^{i+1} - V_x^{i-1}) + (V_y^{j+1} - V_y^
 
 Face-adjacent wall voxels contribute zero velocity (no-penetration boundary condition), baking wall blocking into the divergence field directly.
 
-**Step 2 — Pressure Poisson solve** $\nabla^2 p = \nabla \cdot \mathbf{V} / \Delta t$ via Jacobi iteration:
+**Step 2 — Pressure Poisson solve** $\nabla^2 p = \nabla \cdot \mathbf{V} / \Delta t$ via Jacobi iteration (Harris, 2004):
 
 $$p^{(n+1)}[i] = \frac{p_L + p_R + p_D + p_U + p_B + p_F - (\nabla \cdot \mathbf{V})[i] \cdot h^2}{6}$$
 
 At solid boundaries, the missing neighbour pressure is replaced by the current voxel's pressure (Neumann zero-gradient condition). The solver runs **60 Jacobi iterations per frame**. This value was chosen empirically: below approximately 30 iterations, visible compressibility artifacts appear (smoke partially penetrating thin walls or diverging at corners); beyond 60 there is no perceptible improvement in the visual result.
+
+The three-step pressure projection follows the classic stable-fluids formulation (Stam, 1999; Bridson, 2008), with the Jacobi iteration scheme adapted for GPU ping-pong dispatch (Harris, 2004).
 
 **Step 3 — Velocity projection** subtracts the pressure gradient:
 
@@ -643,7 +647,7 @@ After projection, any velocity component pointing into an adjacent wall face is 
 
 #### 3.4.4 Baroclinic Torque
 
-In a real fluid, vorticity is generated at the interface between regions of different density and temperature. This is the **baroclinic torque** mechanism: when the pressure gradient (aligned with the density gradient) is misaligned with the density gradient itself — which occurs wherever temperature varies across a density interface — a net torque causes the interface to roll up into vortices. This produces the characteristic swirling filaments visible at smoke cloud edges.
+In a real fluid, vorticity is generated at the interface between regions of different density and temperature. This is the **baroclinic torque** mechanism: when the pressure gradient (aligned with the density gradient) is misaligned with the density gradient itself — which occurs wherever temperature varies across a density interface — a net torque causes the interface to roll up into vortices. This produces the characteristic swirling filaments visible at smoke cloud edges. Vortex-based smoke simulators model this phenomenon by explicitly tracking vortex filaments or particles (Wan, Zhang, Guo, & Liu, 2021); the present implementation approximates it within the Eulerian grid solver using the cross-product torque term described below.
 
 The baroclinic torque vector is computed as the cross product of the density and temperature gradients:
 
@@ -881,13 +885,19 @@ Chandrasekhar, S. (1960). *Radiative transfer*. Dover Publications.
 
 Gottschalk, S., Lin, M. C., & Manocha, D. (1996). OBBTree: A hierarchical structure for rapid interference detection. *Proceedings of the 23rd Annual Conference on Computer Graphics and Interactive Techniques (SIGGRAPH '96)*, 171–180. https://doi.org/10.1145/237170.237244
 
+Harris, M. J. (2004). Fast fluid dynamics simulation on the GPU. In R. Fernando (Ed.), *GPU Gems* (Chapter 38). Addison-Wesley Professional.
+
 Henyey, L. G., & Greenstein, J. L. (1941). Diffuse radiation in the galaxy. *The Astrophysical Journal, 93*, 70–83. https://doi.org/10.1086/144246
 
 Hillaire, S. (2020). A scalable and production ready sky and atmosphere rendering technique. *Computer Graphics Forum, 39*(4), 13–22. https://doi.org/10.1111/cgf.14050
 
 Kajiya, J. T., & Von Herzen, B. P. (1984). Ray tracing volume densities. *ACM SIGGRAPH Computer Graphics, 18*(3), 165–174. https://doi.org/10.1145/964965.808594
 
+Lague, S. (2023, October 9). *Coding Adventure: Simulating Fluids* [Video]. YouTube. https://www.youtube.com/watch?v=Q78wvrQ9xsU
+
 Max, N. (1995). Optical models for direct volume rendering. *IEEE Transactions on Visualization and Computer Graphics, 1*(2), 99–108. https://doi.org/10.1109/2945.468400
+
+McGrattan, K. B., Baum, H. R., & Rehm, R. G. (1999). Large eddy simulations of smoke movement. In *Proceedings of the 1999 ASHRAE Winter Meeting*. American Society of Heating, Refrigerating and Air-Conditioning Engineers. https://www.aivc.org/sites/default/files/airbase_11900.pdf
 
 Pharr, M., Jakob, W., & Humphreys, G. (2023). *Physically based rendering: From theory to implementation* (4th ed.). MIT Press. https://www.pbr-book.org
 
@@ -898,6 +908,8 @@ Schneider, A. (2017). The real-time volumetric cloudscapes of Horizon: Zero Dawn
 Schwarz, M., & Seidel, H.-P. (2010). Fast parallel surface and solid voxelization on GPUs. *ACM Transactions on Graphics (SIGGRAPH Asia), 29*(6), Article 179. https://doi.org/10.1145/1882261.1866201
 
 Stam, J. (1999). Stable fluids. *Proceedings of the 26th Annual Conference on Computer Graphics and Interactive Techniques (SIGGRAPH '99)*, 121–128. https://doi.org/10.1145/311535.311548
+
+Wan, F., Zhang, J., Guo, L., & Liu, Y. (2021). Real-time smoke simulation based on vortex method. *Preprints*. https://doi.org/10.20944/preprints202105.0762.v1
 
 Worley, S. (1996). A cellular texture basis function. *Proceedings of the 23rd Annual Conference on Computer Graphics and Interactive Techniques (SIGGRAPH '96)*, 291–294. https://doi.org/10.1145/237170.237267
 
