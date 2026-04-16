@@ -35,30 +35,31 @@ public:
     // (and any other opaque geometry) into it each frame, then pass that texture
     // here.  Passing an uninitialised / always-black texture makes the Final and
     // Smoke-Only debug modes look identical.
+    // smokeTex: bilaterally-upsampled smoke (RGBA16F).
+    //           A = transmittance — depth-aware so it correctly terminates at wall edges.
     void composite(const Texture2D& sceneColorTex,
                    const Texture2D& smokeTex,
                    const Texture2D& depthTex,
                    FullscreenQuad& quad) {
-        // Render to default framebuffer (screen)
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, smokeTex.width, smokeTex.height);
-        
+
         compositeShader.use();
-        compositeShader.setInt("u_SceneTex",        0);
-        compositeShader.setInt("u_SmokeTex",        1);
-        compositeShader.setInt("u_DepthTex",        2);
+        compositeShader.setInt("u_SceneTex",          0);
+        compositeShader.setInt("u_SmokeTex",          1);
+        compositeShader.setInt("u_DepthTex",          2);
         compositeShader.setFloat("u_SharpenStrength", sharpenStrength);
         glUniform1i(glGetUniformLocation(compositeShader.ID, "u_DebugMode"), debugMode);
-        
+
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, sceneColorTex.ID);
-        
+
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, smokeTex.ID);
-        
+
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, depthTex.ID);
-        
+
         glDisable(GL_DEPTH_TEST);
         quad.draw();
         glEnable(GL_DEPTH_TEST);
@@ -102,77 +103,37 @@ private:
             "in vec2 texCoord;\n"
             "out vec4 fragColor;\n"
             "uniform sampler2D u_SceneTex;\n"
-            "uniform sampler2D u_SmokeTex;\n"
+            "uniform sampler2D u_SmokeTex;\n"  // RGBA16F — A = bilateral-upsampled transmittance
             "uniform sampler2D u_DepthTex;\n"
             "uniform float u_SharpenStrength;\n"
             "uniform int u_DebugMode;\n"
             "\n"
             "void main() {\n"
-            "    vec4 scene = texture(u_SceneTex, texCoord);\n"
-            "    vec4 smoke = texture(u_SmokeTex, texCoord);\n"
-            "    float depth = texture(u_DepthTex, texCoord).r;\n"
+            "    vec4  scene         = texture(u_SceneTex, texCoord);\n"
+            "    vec4  smoke         = texture(u_SmokeTex, texCoord);\n"
+            "    // Bilateral upsampling already rejected cross-edge neighbours,\n"
+            "    // so smoke.a terminates correctly at wall geometry.\n"
+            "    float transmittance = clamp(smoke.a, 0.0, 1.0);\n"
+            "    float depth         = texture(u_DepthTex, texCoord).r;\n"
             "    \n"
             "    // ---- Debug modes ------------------------------------------------\n"
-            "    if (u_DebugMode == 1) {\n"
-            "        // Smoke RGB over black — lets you inspect colour independently\n"
-            "        // of whether sceneColorTex is wired up.\n"
-            "        fragColor = vec4(smoke.rgb, 1.0);\n"
-            "        return;\n"
-            "    }\n"
-            "    else if (u_DebugMode == 2) {\n"
-            "        // Density / opacity visualisation (1 - transmittance)\n"
-            "        // White = fully opaque smoke, black = clear air.\n"
-            "        float density = 1.0 - smoke.a;\n"
-            "        fragColor = vec4(vec3(density), 1.0);\n"
-            "        return;\n"
-            "    }\n"
-            "    else if (u_DebugMode == 3) {\n"
-            "        // Raw depth buffer visualisation\n"
-            "        fragColor = vec4(vec3(depth), 1.0);\n"
-            "        return;\n"
-            "    }\n"
+            "    if (u_DebugMode == 1) { fragColor = vec4(smoke.rgb, 1.0); return; }\n"
+            "    if (u_DebugMode == 2) { fragColor = vec4(vec3(1.0 - transmittance), 1.0); return; }\n"
+            "    if (u_DebugMode == 3) { fragColor = vec4(vec3(depth), 1.0); return; }\n"
             "    \n"
-            "    // ---- Default: sharpen RGB then composite -------------------------\n"
+            "    // ---- Sharpen smoke RGB, blend using depth-correct transmittance --\n"
             "    vec2 texelSize = 1.0 / textureSize(u_SmokeTex, 0);\n"
-            "    \n"
-            "    // Sample the 4-neighbourhood for the Laplacian kernel.\n"
-            "    vec4 center = texture(u_SmokeTex, texCoord);\n"
-            "    vec4 north  = texture(u_SmokeTex, texCoord + vec2(0.0,        texelSize.y));\n"
-            "    vec4 south  = texture(u_SmokeTex, texCoord - vec2(0.0,        texelSize.y));\n"
-            "    vec4 east   = texture(u_SmokeTex, texCoord + vec2(texelSize.x, 0.0));\n"
-            "    vec4 west   = texture(u_SmokeTex, texCoord - vec2(texelSize.x, 0.0));\n"
-            "    \n"
-            "    // Use premultiplied color for sharpening to avoid black halos at\n"
-            "    // smoke edges where opacity transitions rapidly.\n"
-            "    float opacityC = clamp(1.0 - center.a, 0.0, 1.0);\n"
-            "    float opacityN = clamp(1.0 - north.a,  0.0, 1.0);\n"
-            "    float opacityS = clamp(1.0 - south.a,  0.0, 1.0);\n"
-            "    float opacityE = clamp(1.0 - east.a,   0.0, 1.0);\n"
-            "    float opacityW = clamp(1.0 - west.a,   0.0, 1.0);\n"
-            "    \n"
-            "    vec3 premulC = center.rgb * opacityC;\n"
-            "    vec3 premulN = north.rgb  * opacityN;\n"
-            "    vec3 premulS = south.rgb  * opacityS;\n"
-            "    vec3 premulE = east.rgb   * opacityE;\n"
-            "    vec3 premulW = west.rgb   * opacityW;\n"
-            "    \n"
-            "    vec3 laplacianPremul = 4.0 * premulC - (premulN + premulS + premulE + premulW);\n"
-            "    // Fade sharpening near transparent boundaries to suppress rings.\n"
-            "    float edgeFade = smoothstep(0.2, 0.8, opacityC);\n"
-            "    vec3 sharpenedPremul = clamp(\n"
-            "        premulC + laplacianPremul * (u_SharpenStrength * edgeFade),\n"
+            "    vec3 n = texture(u_SmokeTex, texCoord + vec2(0.0,          texelSize.y)).rgb;\n"
+            "    vec3 s = texture(u_SmokeTex, texCoord - vec2(0.0,          texelSize.y)).rgb;\n"
+            "    vec3 e = texture(u_SmokeTex, texCoord + vec2(texelSize.x,  0.0        )).rgb;\n"
+            "    vec3 w = texture(u_SmokeTex, texCoord - vec2(texelSize.x,  0.0        )).rgb;\n"
+            "    float opacity  = 1.0 - transmittance;\n"
+            "    float edgeFade = smoothstep(0.2, 0.8, opacity);\n"
+            "    vec3 sharpened = clamp(\n"
+            "        smoke.rgb + (4.0 * smoke.rgb - n - s - e - w) * (u_SharpenStrength * edgeFade),\n"
             "        0.0, 1.0);\n"
-            "    vec3 sharpenedRGB = (opacityC > 1e-4) ? (sharpenedPremul / opacityC) : center.rgb;\n"
             "    \n"
-            "    // Keep original Beer-Lambert transmittance for physically stable blending.\n"
-            "    float transmittance = center.a;\n"
-            "    \n"
-            "    // Standard over-operator:\n"
-            "    //   result = background * transmittance + foreground * (1 - transmittance)\n"
-            "    vec3 finalColor = scene.rgb * transmittance\n"
-            "                    + sharpenedRGB * (1.0 - transmittance);\n"
-            "    \n"
-            "    fragColor = vec4(finalColor, 1.0);\n"
+            "    fragColor = vec4(mix(sharpened, scene.rgb, transmittance), 1.0);\n"
             "}\n";
         
         GLint vs_ok, fs_ok, prog_ok;

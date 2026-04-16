@@ -25,6 +25,7 @@
 class Raymarcher {
 public:
     Texture2D smokeOut;
+    Texture2D smokeMask;  // R16F transmittance — kept at low-res for soft edge compositing
 
     // Tweakable parameters
     float densityScale = 30.0f;
@@ -48,6 +49,7 @@ public:
         halfH = std::max(1, (int)(fullHeight * resolutionScale));
 
         smokeOut.create(halfW, halfH, GL_RGBA16F);
+        smokeMask.create(halfW, halfH, GL_R16F);
 
         marchCS.setUpFromFile("shaders/smoke/Raymarch.comp");
         buildBlitShader();
@@ -61,6 +63,8 @@ public:
         halfH = newH;
         smokeOut.destroy();
         smokeOut.create(halfW, halfH, GL_RGBA16F);
+        smokeMask.destroy();
+        smokeMask.create(halfW, halfH, GL_R16F);
     }
 
     void render(const SSBOBuffer& smokeBuf,
@@ -78,6 +82,7 @@ public:
         glm::mat4 invProj = glm::inverse(proj);
 
         smokeOut.bindImage(0, GL_WRITE_ONLY);
+        smokeMask.bindImage(1, GL_WRITE_ONLY);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, depthTex.ID);
@@ -139,6 +144,7 @@ public:
 
     void destroy() {
         smokeOut.destroy();
+        smokeMask.destroy();
         if (marchCS.ID)    { glDeleteProgram(marchCS.ID);    marchCS.ID = 0; }
         if (blitShader.ID) { glDeleteProgram(blitShader.ID); blitShader.ID = 0; }
     }

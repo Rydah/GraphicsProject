@@ -75,14 +75,16 @@ The system is structured as a sequence of GPU compute shader passes executed eac
                         │     shadow rays + noise erosion │
                         │     (half-resolution FBO)       │
                         │              │                  │
-                        │  7. Catmull-Rom Upsample        │
-                        │     Bicubic 4x4 kernel:         │
-                        │     half-res -> full-res FBO    │
+                        │  7. Bilateral Upsample          │
+                        │     Depth-aware 2x2 filter:     │
+                        │     low-res -> full-res FBO     │
+                        │     (2 passes for quarter-res)  │
                         │              │                  │
                         │  8. Composite + Sharpen         │
-                        │     Premul-alpha Laplacian      │
-                        │     sharpen + over-operator     │
-                        │     blend onto default FBO      │
+                        │     Laplacian sharpen + over-   │
+                        │     operator blend onto default │
+                        │     FBO; transmittance from     │
+                        │     bilateral alpha channel     │
                         └─────────────────────────────────┘
 ```
 
@@ -728,27 +730,27 @@ The ray march is the most computationally expensive pass in the pipeline. At 192
 
 Rendering at half resolution reduces the pixel count by a factor of 4 (half width times half height). Since the ray march typically dominates frame time in a volumetric pipeline, this yields a practical 2-4x speedup on the overall render loop. The subsequent upsampling, compositing, and sharpening passes together add less than 1 ms at 1080p, so the net gain is close to the full 4x reduction on the march.
 
-This strategy is directly inspired by the Horizon Zero Dawn volumetric system (Schneider, 2017), in which the cloud volume is rendered at quarter resolution with temporal reprojection and a spatial reconstruction filter recovering full-resolution quality. Nathan Vines's quarter-resolution optimisation was reported to make the cloud shader **10x faster or more**, making real-time volumetric rendering viable in a shipping game. The current implementation adopts the spatial reconstruction component (Catmull-Rom upsampling) but omits temporal reprojection, which would require a per-pixel motion vector buffer.
+This strategy is directly inspired by the Horizon Zero Dawn volumetric system (Schneider, 2017), in which the cloud volume is rendered at quarter resolution with temporal reprojection and a spatial reconstruction filter recovering full-resolution quality. Nathan Vines's quarter-resolution optimisation was reported to make the cloud shader **10x faster or more**, making real-time volumetric rendering viable in a shipping game. The current implementation adopts the spatial reconstruction component (bilateral depth-aware upsampling) but omits temporal reprojection, which would require a per-pixel motion vector buffer.
 
-#### 3.5.2 Catmull-Rom Bicubic Upsampling
+#### 3.5.2 Bilateral Depth-Aware Upsampling
 
-Bilinear interpolation when upsampling 2x introduces visible blur at smoke boundaries because it is a first-order filter — it cannot reconstruct frequencies above the Nyquist limit of the half-resolution buffer. A **Catmull-Rom bicubic** filter is used instead: a third-order interpolating spline that passes through sampled values exactly and produces smooth, sub-pixel-accurate transitions without the ringing of a Mitchell-Netravali filter.
+Naive bilinear or bicubic upsampling when reconstructing from a low-resolution smoke buffer introduces a characteristic artefact at geometry boundaries: a low-resolution texel that straddles a depth discontinuity (e.g., a smoke-filled region adjacent to a wall) averages smoke from both sides of the wall. The upsampler then spreads that averaged value across the full-resolution wall-face pixels, producing jagged coloured fringes at wall edges whenever smoke is present nearby.
 
-The Catmull-Rom weight function for normalised offset $f \in [0,1]$ is:
+To fix this, a **bilateral (depth-aware)** 2x2 upsample is used. For each full-resolution output pixel, the four enclosing low-resolution neighbours are weighted not just by bilinear proximity but also by depth similarity:
 
-$$w_0(f) = -\tfrac{1}{2}f^3 + f^2 - \tfrac{1}{2}f$$
+$$w_i = b_i \cdot \exp\!\left(-\sigma \,|\,d_{center} - d_i\,|\right)$$
 
-$$w_1(f) = \;\tfrac{3}{2}f^3 - \tfrac{5}{2}f^2 + 1$$
+where $b_i$ is the standard bilinear weight for neighbour $i$, $d_{center}$ is the linearised scene depth at the full-resolution pixel, $d_i$ is the linearised scene depth sampled at the low-resolution neighbour's UV, and $\sigma = 100$ is a depth sensitivity constant. A neighbour whose depth differs significantly from the centre (i.e., it lies on the other side of a wall) receives a weight near zero, preventing its smoke colour and transmittance from contributing to pixels on this side of the wall.
 
-$$w_2(f) = -\tfrac{3}{2}f^3 + 2f^2 + \tfrac{1}{2}f$$
+Depth values are linearised from the hardware $[0,1]$ depth buffer before comparison using the standard perspective formula:
 
-$$w_3(f) = \;\tfrac{1}{2}f^3 - \tfrac{1}{2}f^2$$
+$$d_{linear} = \frac{2 \cdot z_{near} \cdot z_{far}}{z_{far} + z_{near} - (2d - 1)(z_{far} - z_{near})}$$
 
-The 2D bicubic sample draws from a **4x4 neighbourhood** in the half-resolution texture:
+If the total accumulated weight falls below $10^{-5}$ (i.e., all neighbours are across a depth discontinuity), the filter falls back to nearest-neighbour to avoid a divide-by-zero and guarantee a valid output.
 
-$$\text{out}(u,v) = \sum_{j=0}^{3}\sum_{i=0}^{3} w_{x,i} \cdot w_{y,j} \cdot \text{tex}(u_0 + i,\; v_0 + j)$$
+**Two-pass quarter-resolution upsampling.** When the ray march runs at quarter resolution, the upsampler chains two bilateral passes: quarter-res $\to$ half-res, then half-res $\to$ full-res. Each pass limits the upscale ratio to 2x, ensuring the bilateral depth comparison is done over the same spatial scale for which $\sigma$ was tuned. An intermediate `GL_RGBA16F` texture is allocated for the half-resolution ping-pong step.
 
-where $(u_0, v_0)$ is the top-left integer coordinate of the neighbourhood and $(w_{x,i}, w_{y,j})$ are the Catmull-Rom weights for the fractional position within the half-resolution texel. The alpha channel (Beer-Lambert transmittance) is upsampled identically to RGB and then clamped to $[0,1]$ to prevent non-physical transmittance values at the sample boundary. Output is written to a full-resolution `GL_RGBA16F` FBO.
+Output is a full-resolution `GL_RGBA16F` texture whose alpha channel contains the bilaterally-reconstructed Beer-Lambert transmittance — depth-correct at all wall boundaries.
 
 #### 3.5.3 Composite Pass and Laplacian Sharpening
 
@@ -758,7 +760,7 @@ $$\mathbf{C}_{out} = \mathbf{C}_{scene} \cdot T + \mathbf{C}_{smoke} \cdot (1 - 
 
 where $T$ is the Beer-Lambert transmittance stored in the alpha channel of the upsampled smoke texture and $\mathbf{C}_{scene}$ is the scene rendered to a colour FBO in the depth pre-pass.
 
-**Laplacian sharpening.** Bicubic upsampling recovers most high-frequency detail but can leave smoke edges slightly soft. A **4-neighbourhood Laplacian** sharpening pass is applied to the smoke RGB before compositing to restore perceived crispness:
+**Laplacian sharpening.** Bilateral upsampling recovers edge-correct detail but can leave smoke interior slightly soft. A **4-neighbourhood Laplacian** sharpening pass is applied to the smoke RGB before compositing to restore perceived crispness:
 
 $$\mathbf{L} = 4\,\mathbf{C}_{center} - (\mathbf{C}_{N} + \mathbf{C}_{S} + \mathbf{C}_{E} + \mathbf{C}_{W})$$
 
@@ -805,7 +807,7 @@ The implemented system produces a real-time volumetric smoke grenade effect that
 | Fluid solver | 7 dispatches per frame | Pressure solve = 60 ping-pong dispatches |
 | Noise volume | 1 dispatch per frame | $128^3$ volume, $8^3$ workgroup |
 | Ray march | 1 dispatch per frame | Half-resolution $(W/2 \times H/2)$; two-phase coarse+fine |
-| Catmull-Rom upsample | 1 fullscreen pass | 4x4 bicubic neighbourhood; half-res to full-res `GL_RGBA16F` FBO |
+| Bilateral upsample | 1-2 fullscreen passes | Depth-aware 2x2 filter ($\sigma=100$); low-res to full-res `GL_RGBA16F` FBO; 2 passes for quarter-res |
 | Composite + sharpen | 1 fullscreen pass | Premul-alpha Laplacian sharpen; over-operator blend to default FBO |
 
 The system runs in real time on a desktop GPU. The dominant cost is the pressure Jacobi solve (60 dispatches over the full grid), followed by the ray march. Both scale as $O(N_x N_y N_z)$ and are well-suited to GPU parallelism via the $8 \times 8 \times 8$ local workgroup dispatch pattern. The half-resolution ray march reduces the per-frame pixel cost by 4x; the upsampling and composite passes together add under 1 ms at 1080p, preserving most of that gain in practice.
@@ -839,8 +841,8 @@ The system runs in real time on a desktop GPU. The dominant cost is the pressure
 The original CS2 implementation (Gunnell, 2023) uses a Unity-based system with several additional features. This project implements several of them and omits others:
 
 **Implemented from CS2/HZD reference:**
-- **Half-resolution ray march with Catmull-Rom upsampling** — the ray march runs at half resolution and is reconstructed to full resolution using a 4x4 Catmull-Rom bicubic kernel, following the spatial reconstruction strategy described for Horizon Zero Dawn (Schneider, 2017)
-- **Laplacian sharpening in the composite pass** — a premultiplied-alpha Laplacian pass restores edge detail after bicubic upsampling, with an edge-fade mask to suppress ringing at transparent boundaries
+- **Half-resolution ray march with bilateral depth-aware upsampling** — the ray march runs at half (or quarter) resolution and is reconstructed to full resolution using a depth-weighted 2x2 bilateral filter, preventing smoke from bleeding across wall edges. For quarter-resolution, two passes are chained (quarter to half, then half to full), following the two-pass strategy described in Gunnell (2023)
+- **Laplacian sharpening in the composite pass** — a premultiplied-alpha Laplacian pass restores edge detail after upsampling, with an edge-fade mask to suppress ringing at transparent boundaries
 
 **Not implemented:**
 - **Bullet hole interactions** — gunfire creating SDF capsule deformations in the smoke volume, punching temporary corridors through the cloud

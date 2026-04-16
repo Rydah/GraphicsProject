@@ -637,11 +637,11 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             // - R OFF -> voxel debug smoke cubes (yellow/orange)
             if (g_raymarchEnabled) {
                 if (raymarchResolutionMode == 0) {
-                    // Full-res: skip upsampler, composite directly
+                    // Full-res: no upsampler needed
                     compositor.composite(sceneColorTex, raymarcher.smokeOut, depthPass.depthTex, fsQuad);
                 } else {
-                    // Half/quarter-res: upsample via Catmull-Rom then composite
-                    upsampler.upsample(raymarcher.smokeOut, fsQuad);
+                    // Half/quarter-res: bilateral depth-aware upsample, then composite
+                    upsampler.upsample(raymarcher.smokeOut, depthPass.depthTex, fsQuad, raymarchResolutionMode, 0.001f, 100.0f);
                     compositor.composite(sceneColorTex, upsampler.fullResOutput, depthPass.depthTex, fsQuad);
                 }
             } else {

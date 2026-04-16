@@ -9,101 +9,111 @@
 #include "core/FullscreenQuad.h"
 #include "glVersion.h"
 
+// Bilateral (depth-aware) upsampler.
+//
+// Replaces standard bilinear/bicubic with a 2x2 bilateral filter: each low-res
+// neighbor is weighted by exp(-|depth_center - depth_neighbor| * sigma) so that
+// samples across a depth discontinuity (e.g. smoke behind a wall) are rejected.
+// This prevents smoke color/transmittance from bleeding across wall edges at
+// half-res or quarter-res.
+//
+// Quarter-res chains two bilateral passes (Q->half, half->full) to limit the
+// upscale ratio per pass, matching Acerola's approach.
 class Upsampler {
 public:
-    Texture2D   fullResOutput;
-    
+    Texture2D fullResOutput;
+
     void init(int fullWidth, int fullHeight) {
         fullW = fullWidth;
         fullH = fullHeight;
-        
-        fullResOutput.create(fullW, fullH, GL_RGBA16F);
-        
-        // Setup upsampler shader (Catmull-Rom bicubic)
-        buildUpsampler();
-        buildBlitShader();
-        
-        // Setup output FBO for upsampling pass
-        outputFBO.create();
-        outputFBO.attachColor(fullResOutput.ID);
-        if (!outputFBO.isComplete()) {
-            std::cerr << "Upsampler output FBO incomplete!" << std::endl;
-        }
+
+        fullResOutput.create(fullW,     fullH,     GL_RGBA16F);
+        halfTex      .create(fullW / 2, fullH / 2, GL_RGBA16F);
+
+        buildBilateralShader();
+
+        outputFBO.create(); outputFBO.attachColor(fullResOutput.ID);
+        halfFBO  .create(); halfFBO  .attachColor(halfTex.ID);
+
+        if (!outputFBO.isComplete()) std::cerr << "Upsampler output FBO incomplete!\n";
+        if (!halfFBO  .isComplete()) std::cerr << "Upsampler half FBO incomplete!\n";
     }
-    
+
     void resize(int fullWidth, int fullHeight) {
         if (fullWidth == fullW && fullHeight == fullH) return;
         fullW = fullWidth;
         fullH = fullHeight;
-        
-        fullResOutput.destroy();
-        fullResOutput.create(fullW, fullH, GL_RGBA16F);
-        
-        outputFBO.destroy();
-        outputFBO.create();
-        outputFBO.attachColor(fullResOutput.ID);
-        if (!outputFBO.isComplete()) {
-            std::cerr << "Upsampler output FBO incomplete after resize!" << std::endl;
-        }
+
+        fullResOutput.destroy(); outputFBO.destroy();
+        halfTex      .destroy(); halfFBO  .destroy();
+
+        fullResOutput.create(fullW,     fullH,     GL_RGBA16F);
+        halfTex      .create(fullW / 2, fullH / 2, GL_RGBA16F);
+
+        outputFBO.create(); outputFBO.attachColor(fullResOutput.ID);
+        halfFBO  .create(); halfFBO  .attachColor(halfTex.ID);
     }
-    
-    // Upsample from half-res texture to full-res
-    // Applies Catmull-Rom bicubic filtering
-    void upsample(const Texture2D& halfResTex, FullscreenQuad& quad) {
-        outputFBO.bind();
-        glViewport(0, 0, fullW, fullH);
-        glClear(GL_COLOR_BUFFER_BIT);
-        
-        upsamplerShader.use();
-        upsamplerShader.setInt("u_HalfResTex", 0);
-        glUniform2i(glGetUniformLocation(upsamplerShader.ID, "u_HalfResSize"), halfResTex.width, halfResTex.height);
-        
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, halfResTex.ID);
-        
+
+    // resMode: 1 = half-res input, 2 = quarter-res input.
+    // depthTex: full-res scene depth (GL_DEPTH_COMPONENT or R-format depth copy).
+    // zNear/zFar: camera clip planes, used to linearise depth for bilateral weighting.
+    void upsample(const Texture2D& lowResSmoke,
+                  const Texture2D& depthTex,
+                  FullscreenQuad&  quad,
+                  int   resMode,
+                  float zNear,
+                  float zFar)
+    {
         glDisable(GL_DEPTH_TEST);
-        quad.draw();
+        bilateralShader.use();
+        bilateralShader.setInt  ("u_Tex",      0);
+        bilateralShader.setInt  ("u_DepthTex", 1);
+        bilateralShader.setFloat("u_Near",     zNear);
+        bilateralShader.setFloat("u_Far",      zFar);
+
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, depthTex.ID);
+        glActiveTexture(GL_TEXTURE0);
+
+        if (resMode == 2) {
+            // Pass 1: quarter -> half
+            bilateralBlit(lowResSmoke, halfFBO,   fullW / 2, fullH / 2, quad);
+            // Pass 2: half -> full
+            bilateralBlit(halfTex,     outputFBO, fullW,     fullH,     quad);
+        } else {
+            // Half -> full, single pass
+            bilateralBlit(lowResSmoke, outputFBO, fullW, fullH, quad);
+        }
+
         glEnable(GL_DEPTH_TEST);
-        
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
-    
-    // Blit the upsampled result to screen
-    void blit(FullscreenQuad& quad) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_SRC_ALPHA);
-        
-        blitShader.use();
-        blitShader.setInt("u_SmokeTex", 0);
-        fullResOutput.bindSampler(0);
-        
-        glDisable(GL_DEPTH_TEST);
-        quad.draw();
-        glEnable(GL_DEPTH_TEST);
-        
-        glDisable(GL_BLEND);
-    }
-    
+
     void destroy() {
         fullResOutput.destroy();
-        outputFBO.destroy();
-        if (upsamplerShader.ID) {
-            glDeleteProgram(upsamplerShader.ID);
-            upsamplerShader.ID = 0;
-        }
-        if (blitShader.ID) {
-            glDeleteProgram(blitShader.ID);
-            blitShader.ID = 0;
-        }
+        halfTex      .destroy();
+        outputFBO    .destroy();
+        halfFBO      .destroy();
+        if (bilateralShader.ID) { glDeleteProgram(bilateralShader.ID); bilateralShader.ID = 0; }
     }
-    
+
 private:
-    shader upsamplerShader;
-    shader blitShader;
+    shader      bilateralShader;
     Framebuffer outputFBO;
+    Framebuffer halfFBO;
+    Texture2D   halfTex;   // RGBA16F ping-pong for quarter-res pass 1
     int fullW = 0, fullH = 0;
-    
-    void buildUpsampler() {
+
+    void bilateralBlit(const Texture2D& src, Framebuffer& dstFBO, int dstW, int dstH, FullscreenQuad& quad) {
+        dstFBO.bind();
+        glViewport(0, 0, dstW, dstH);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUniform2i(glGetUniformLocation(bilateralShader.ID, "u_TexSize"), src.width, src.height);
+        glBindTexture(GL_TEXTURE_2D, src.ID);
+        quad.draw();
+    }
+
+    void buildBilateralShader() {
         const char* vs = GLSL_VERSION
             "layout(location=0) in vec2 aPos;\n"
             "out vec2 texCoord;\n"
@@ -111,148 +121,103 @@ private:
             "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
             "    texCoord = aPos * 0.5 + 0.5;\n"
             "}\n";
-            
-        // FIX 1: catmullRom takes float, not vec2.
-        // FIX 2: renamed local variable 'sample' -> 'texSample' ('sample' is a reserved
-        //         GLSL keyword for multisampling and causes a compile error on GL 4.30+).
+
+        // Bilateral 2x2 bilinear upsample.
+        //
+        // For each full-res output pixel:
+        //   1. Read scene depth and linearise it.
+        //   2. Iterate the 2x2 low-res neighbourhood.
+        //   3. For each neighbour, read the scene depth at that position.
+        //   4. Weight = bilinear_weight * exp(-|depth_diff| * sigma).
+        //      Neighbours across a depth discontinuity (wall edge) get near-zero weight.
+        //   5. Normalise. Fallback to nearest-neighbour if all weights collapse.
+        //
+        // Result: smoke colour + transmittance alpha are depth-correct at wall edges
+        // — no bleeding of smoke across geometry boundaries.
         const char* fs = GLSL_VERSION
             "in vec2 texCoord;\n"
             "out vec4 fragColor;\n"
-            "uniform sampler2D u_HalfResTex;\n"
-            "uniform ivec2 u_HalfResSize;\n"
+            "uniform sampler2D u_Tex;\n"
+            "uniform sampler2D u_DepthTex;\n"
+            "uniform ivec2     u_TexSize;\n"
+            "uniform float     u_Near;\n"
+            "uniform float     u_Far;\n"
             "\n"
-            "vec4 catmullRom(float f) {\n"
-            "    vec4 w;\n"
-            "    w.x =  f*(-0.5 + f*(1.0 - 0.5*f));\n"
-            "    w.y =  1.0 + f*f*(-2.5 + 1.5*f);\n"
-            "    w.z =  f*(0.5 + f*(2.0 - 1.5*f));\n"
-            "    w.w =  f*f*(-0.5 + 0.5*f);\n"
-            "    return w;\n"
+            "float linearize(float d) {\n"
+            "    float z = d * 2.0 - 1.0;\n"
+            "    return (2.0 * u_Near * u_Far) / (u_Far + u_Near - z * (u_Far - u_Near));\n"
             "}\n"
             "\n"
             "void main() {\n"
-            "    // Map full-res texture coordinate to half-res\n"
-            "    vec2 halfResCoord = texCoord * vec2(u_HalfResSize);\n"
-            "    vec2 baseCoord = floor(halfResCoord - 0.5);\n"
-            "    vec2 frac = fract(halfResCoord - 0.5);\n"
-            "    \n"
-            "    // Clamp base coordinate to valid range\n"
-            "    baseCoord = max(vec2(0), min(vec2(u_HalfResSize - 2), baseCoord));\n"
-            "    \n"
-            "    // Get Catmull-Rom weights for x and y\n"
-            "    vec4 wx = catmullRom(frac.x);\n"
-            "    vec4 wy = catmullRom(frac.y);\n"
-            "    \n"
-            "    vec4 color = vec4(0.0);\n"
-            "    float totalWeight = 0.0;\n"
-            "    \n"
-            "    // 4x4 neighborhood\n"
-            "    for (int dy = -1; dy <= 2; dy++) {\n"
-            "        for (int dx = -1; dx <= 2; dx++) {\n"
-            "            vec2 sampleCoord = baseCoord + vec2(dx, dy);\n"
-            "            sampleCoord = clamp(sampleCoord, vec2(0), vec2(u_HalfResSize - 1));\n"
-            "            \n"
-            "            float w = wx[dx + 1] * wy[dy + 1];\n"
-            "            vec4 texSample = texture(u_HalfResTex, (sampleCoord + 0.5) / vec2(u_HalfResSize));\n"
-            "            color += texSample * w;\n"
-            "            totalWeight += w;\n"
+            "    float centerDepth = linearize(texture(u_DepthTex, texCoord).r);\n"
+            "\n"
+            "    vec2  texSize  = vec2(u_TexSize);\n"
+            "    vec2  pixelPos = texCoord * texSize - 0.5;\n"
+            "    ivec2 base     = ivec2(floor(pixelPos));\n"
+            "    vec2  f        = fract(pixelPos);\n"
+            "\n"
+            "    vec4  result   = vec4(0.0);\n"
+            "    float totalW   = 0.0;\n"
+            "\n"
+            "    for (int dy = 0; dy <= 1; dy++) {\n"
+            "        for (int dx = 0; dx <= 1; dx++) {\n"
+            "            ivec2 texel = clamp(base + ivec2(dx, dy), ivec2(0), u_TexSize - 1);\n"
+            "            vec2  uv    = (vec2(texel) + 0.5) / texSize;\n"
+            "\n"
+            "            float nDepth = linearize(texture(u_DepthTex, uv).r);\n"
+            "            float depthW = exp(-abs(centerDepth - nDepth) * 100.0);\n"
+            "\n"
+            "            float bx = (dx == 0) ? (1.0 - f.x) : f.x;\n"
+            "            float by = (dy == 0) ? (1.0 - f.y) : f.y;\n"
+            "            float w  = bx * by * depthW;\n"
+            "\n"
+            "            result += texture(u_Tex, uv) * w;\n"
+            "            totalW += w;\n"
             "        }\n"
             "    }\n"
-            "    \n"
-            "    color = color / max(totalWeight, 0.0001);\n"
-            "    // Clamp alpha to [0,1] range for safety\n"
-            "    color.a = clamp(color.a, 0.0, 1.0);\n"
-            "    \n"
-            "    fragColor = color;\n"
+            "\n"
+            "    if (totalW < 1e-5) {\n"
+            "        // All neighbours on the other side of a depth edge — use nearest.\n"
+            "        ivec2 nearest = clamp(ivec2(round(pixelPos)), ivec2(0), u_TexSize - 1);\n"
+            "        result = texture(u_Tex, (vec2(nearest) + 0.5) / texSize);\n"
+            "    } else {\n"
+            "        result /= totalW;\n"
+            "    }\n"
+            "\n"
+            "    result.a = clamp(result.a, 0.0, 1.0);\n"
+            "    fragColor = result;\n"
             "}\n";
-        
-        GLint vs_ok, fs_ok, prog_ok;
-        uint32_t vs_id = glCreateShader(GL_VERTEX_SHADER);
-        glShaderSource(vs_id, 1, &vs, nullptr);
-        glCompileShader(vs_id);
-        glGetShaderiv(vs_id, GL_COMPILE_STATUS, &vs_ok);
-        if (!vs_ok) {
+
+        GLint ok;
+        uint32_t vsID = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vsID, 1, &vs, nullptr);
+        glCompileShader(vsID);
+        glGetShaderiv(vsID, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
             char log[1024] = {};
-            glGetShaderInfoLog(vs_id, 1024, nullptr, log);
-            std::cerr << "Upsampler VS compile error:\n" << log << std::endl;
+            glGetShaderInfoLog(vsID, 1024, nullptr, log);
+            std::cerr << "Upsampler VS error:\n" << log << "\n";
         }
-        
-        uint32_t fs_id = glCreateShader(GL_FRAGMENT_SHADER);
-        glShaderSource(fs_id, 1, &fs, nullptr);
-        glCompileShader(fs_id);
-        glGetShaderiv(fs_id, GL_COMPILE_STATUS, &fs_ok);
-        if (!fs_ok) {
+        uint32_t fsID = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fsID, 1, &fs, nullptr);
+        glCompileShader(fsID);
+        glGetShaderiv(fsID, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
             char log[1024] = {};
-            glGetShaderInfoLog(fs_id, 1024, nullptr, log);
-            std::cerr << "Upsampler FS compile error:\n" << log << std::endl;
+            glGetShaderInfoLog(fsID, 1024, nullptr, log);
+            std::cerr << "Upsampler FS error:\n" << log << "\n";
         }
-        
-        upsamplerShader.ID = glCreateProgram();
-        glAttachShader(upsamplerShader.ID, vs_id);
-        glAttachShader(upsamplerShader.ID, fs_id);
-        glLinkProgram(upsamplerShader.ID);
-        glGetProgramiv(upsamplerShader.ID, GL_LINK_STATUS, &prog_ok);
-        if (!prog_ok) {
+        bilateralShader.ID = glCreateProgram();
+        glAttachShader(bilateralShader.ID, vsID);
+        glAttachShader(bilateralShader.ID, fsID);
+        glLinkProgram(bilateralShader.ID);
+        glGetProgramiv(bilateralShader.ID, GL_LINK_STATUS, &ok);
+        if (!ok) {
             char log[1024] = {};
-            glGetProgramInfoLog(upsamplerShader.ID, 1024, nullptr, log);
-            std::cerr << "Upsampler shader link error:\n" << log << std::endl;
+            glGetProgramInfoLog(bilateralShader.ID, 1024, nullptr, log);
+            std::cerr << "Upsampler link error:\n" << log << "\n";
         }
-        
-        glDeleteShader(vs_id);
-        glDeleteShader(fs_id);
-    }
-    
-    void buildBlitShader() {
-        const char* vs = GLSL_VERSION
-            "layout(location=0) in vec2 aPos;\n"
-            "out vec2 texCoord;\n"
-            "void main() {\n"
-            "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
-            "    texCoord = aPos * 0.5 + 0.5;\n"
-            "}\n";
-        
-        const char* fs = GLSL_VERSION
-            "in vec2 texCoord;\n"
-            "out vec4 fragColor;\n"
-            "uniform sampler2D u_SmokeTex;\n"
-            "void main() {\n"
-            "    vec4 smoke = texture(u_SmokeTex, texCoord);\n"
-            "    fragColor = smoke;\n"
-            "}\n";
-        
-        GLint vs_ok, fs_ok, prog_ok;
-        uint32_t vs_id = glCreateShader(GL_VERTEX_SHADER);
-        glShaderSource(vs_id, 1, &vs, nullptr);
-        glCompileShader(vs_id);
-        glGetShaderiv(vs_id, GL_COMPILE_STATUS, &vs_ok);
-        if (!vs_ok) {
-            char log[1024] = {};
-            glGetShaderInfoLog(vs_id, 1024, nullptr, log);
-            std::cerr << "Upsampler blit VS compile error:\n" << log << std::endl;
-        }
-        
-        uint32_t fs_id = glCreateShader(GL_FRAGMENT_SHADER);
-        glShaderSource(fs_id, 1, &fs, nullptr);
-        glCompileShader(fs_id);
-        glGetShaderiv(fs_id, GL_COMPILE_STATUS, &fs_ok);
-        if (!fs_ok) {
-            char log[1024] = {};
-            glGetShaderInfoLog(fs_id, 1024, nullptr, log);
-            std::cerr << "Upsampler blit FS compile error:\n" << log << std::endl;
-        }
-        
-        blitShader.ID = glCreateProgram();
-        glAttachShader(blitShader.ID, vs_id);
-        glAttachShader(blitShader.ID, fs_id);
-        glLinkProgram(blitShader.ID);
-        glGetProgramiv(blitShader.ID, GL_LINK_STATUS, &prog_ok);
-        if (!prog_ok) {
-            char log[1024] = {};
-            glGetProgramInfoLog(blitShader.ID, 1024, nullptr, log);
-            std::cerr << "Upsampler blit shader link error:\n" << log << std::endl;
-        }
-        
-        glDeleteShader(vs_id);
-        glDeleteShader(fs_id);
+        glDeleteShader(vsID);
+        glDeleteShader(fsID);
     }
 };
