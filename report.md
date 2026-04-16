@@ -724,6 +724,56 @@ $$\mathbf{V}_{inject} = \hat{\mathbf{d}} \cdot S \cdot w \cdot b + \boldsymbol{\
 
 **`smokeFallOff = 0.9995`** means the smoke field loses 0.05% of its density per frame. At 60 fps this gives a half-life of $\ln(2) / (1 - 0.9995) / 60 \approx 23$ seconds — consistent with the CS2 smoke grenade duration of approximately 18 seconds before the cloud fully clears.
 
+#### 3.4.7 Interactive Vacuum (Smoke Suction)
+
+An interactive *vacuum* effect allows the user to designate a world-space point that actively sucks nearby smoke toward it. It is activated by **Shift + right-click** — the same screen-space ray-cast used to place a grenade seed detects the nearest air voxel behind a wall surface and sets that voxel as the vacuum origin. The effect runs for a configurable duration (default 5 s) before deactivating automatically.
+
+The implementation operates across three of the four fluid passes in the per-frame loop, giving it both an immediate visual pull and a physically consistent pressure-driven inflow.
+
+**Pass 1 — Pressure Dirichlet boundary condition (PressureJacobi.comp).** Each Jacobi iteration that processes a voxel within 1.5 voxels of the vacuum grid coordinate overrides the normal Poisson update with a fixed large negative pressure:
+
+$$p_{vacuum} = P_{sink} \quad (\text{default } {-5.0})$$
+
+This is a *Dirichlet* boundary condition: the pressure solver is forced to maintain a low-pressure region at the vacuum point throughout all 60 iterations. Once the projection step subtracts $\nabla p$ from the velocity field, the pressure gradient pointing inward toward the sink drives a natural convergent inflow — all neighbouring voxels develop a velocity component directed toward the vacuum without any explicit force being written.
+
+**Pass 2 — Direct velocity override with line-of-sight masking (ApplyForces.comp).** After buoyancy and baroclinic torque are applied, a second vacuum term directly sets the velocity of any voxel within the world-space influence radius to point at the vacuum origin at full strength:
+
+$$\mathbf{V} \leftarrow \hat{\mathbf{d}}_{vacuum} \cdot S_{vacuum}$$
+
+where $\hat{\mathbf{d}}_{vacuum}$ is the unit vector from the voxel to the vacuum origin and $S_{vacuum}$ is the strength scalar (default 8.5 world-units/s). Crucially, this override is guarded by a **line-of-sight (LoS) check** — a voxel-stepping march from the current voxel toward the vacuum origin along $\lceil \text{dist} \rceil$ equal steps. If any intermediate voxel is solid, the wall blocks the direct path and the force is suppressed for that voxel:
+
+```glsl
+bool los = true;
+float steps = ceil(dist);
+vec3 step = toVacuum / steps;
+for (float s = 1.0; s < steps; s += 1.0) {
+    ivec3 probe = ivec3(round(vec3(c) + step * s));
+    if (inBounds(probe) && walls[flatIdx(probe)] != 0) {
+        los = false; break;
+    }
+}
+if (los) vel = normalize(toVacuum) * u_VacuumStrength;
+```
+
+This prevents smoke on the far side of a wall from being pulled through the geometry — the vacuum only pulls voxels it has optical access to. Smoke in a blocked room must route through doorways to reach the sink, exactly as it does during flood-fill expansion.
+
+**Pass 3 — Semi-Lagrangian backtrace displacement (AdvectSmoke.comp).** The pressure projection pass would normally subtract the induced pressure gradient and partially cancel the direct velocity set in Pass 2. To ensure the density field visibly converges toward the vacuum even across this cancellation, the smoke advection backtrace is additionally displaced:
+
+$$\mathbf{x}_{prev} \mathrel{+}= \hat{\mathbf{d}}_{away} \cdot S_{vacuum} \cdot \frac{1}{1 + (d / r_{vacuum})^2} \cdot \Delta t$$
+
+The $1/(1 + r^2)$ falloff is a *soft* 1/r² kernel with no hard cutoff — at $d = r_{vacuum}$ the strength is half-maximum, at $2r_{vacuum}$ it is one-fifth, giving a gradual influence that extends beyond the hard-cutoff of Pass 2 and tapers smoothly. By nudging the backtrace *away* from the vacuum rather than setting velocity, this displacement is applied after projection and cannot be cancelled by the pressure step.
+
+The combination of all three passes produces the characteristic visual: smoke density rapidly converges toward the vacuum point, the surrounding cloud thins out and develops a directional flow field, and geometry walls cast shadow-like gaps in the suction pattern where line-of-sight is occluded.
+
+**Table 9 — Vacuum parameters**
+
+| Parameter | Default | Effect of increasing | Effect of decreasing |
+|---|---|---|---|
+| `duration` | `5.0 s` | Vacuum persists longer before auto-deactivation | Shorter burst; smoke recovers sooner |
+| `strength` | `8.5` | Faster direct velocity pull; density converges more quickly | Weaker pull; subtle drift toward sink |
+| `radius` (world-space) | `2.0` | Larger influence sphere for direct velocity override | Only voxels very close to the origin are directly pulled |
+| `pressure` | `-5.0` | Stronger negative Dirichlet BC; pressure-driven inflow accelerates | Weaker convergent flow from pressure projection |
+
 ---
 
 ### 3.5 Post-Processing Pipeline
