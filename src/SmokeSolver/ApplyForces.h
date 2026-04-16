@@ -20,9 +20,9 @@ public:
     struct VacuumState {
         bool      active   = false;
         float     elapsed  = 0.0f;
-        float     duration = 2.0f;    // seconds before auto-dissipation
-        float     strength = 5.0f;   // inward acceleration (world-units/s^2)
-        float     radius   = 2.5f;    // world-space influence radius
+        float     duration = 5.0f;    // seconds before auto-dissipation
+        float     strength = 8.5f;   // inward acceleration (world-units/s^2)
+        float     radius   = 2.0f;    // world-space influence radius
         float     pressure = -5.0f;   // negative pressure injected at vacuum voxel (Dirichlet BC)
         glm::vec3 worldPos = glm::vec3(0.0f);
     } vacuum;
