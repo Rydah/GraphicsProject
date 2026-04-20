@@ -64,18 +64,39 @@ bool inBounds(ivec3 c) {
            c.z < u_GridSize.z;
 }
 
+float sampleDensityClamped(ivec3 p, float fallback) {
+    if (!inBounds(p)) return fallback;
+    int i = flatIdx(p);
+    if (walls[i] != 0) return fallback;
+    return smokeDensity[i];
+}
+
+float sampleTempClamped(ivec3 p, float fallback) {
+    if (!inBounds(p)) return fallback;
+    int i = flatIdx(p);
+    if (walls[i] != 0) return fallback;
+    return velocitySrc[i].w;
+}
+
+vec3 sampleVel(ivec3 p) {
+    if (!inBounds(p)) return vec3(0.0);
+    int i = flatIdx(p);
+    if (walls[i] != 0) return vec3(0.0);
+    return velocitySrc[i].xyz;
+}
+
 void main() {
     ivec3 c = ivec3(gl_GlobalInvocationID.xyz);
     if (!inBounds(c)) return;
 
     int idx = flatIdx(c);
 
-    int idxR = flatIdx(c + ivec3( 1,  0,  0));
-    int idxL = flatIdx(c + ivec3(-1,  0,  0));
-    int idxU = flatIdx(c + ivec3( 0,  1,  0));
-    int idxD = flatIdx(c + ivec3( 0, -1,  0));
-    int idxF = flatIdx(c + ivec3( 0,  0,  1));
-    int idxB = flatIdx(c + ivec3( 0,  0, -1));
+    // int idxR = flatIdx(c + ivec3( 1,  0,  0));
+    // int idxL = flatIdx(c + ivec3(-1,  0,  0));
+    // int idxU = flatIdx(c + ivec3( 0,  1,  0));
+    // int idxD = flatIdx(c + ivec3( 0, -1,  0));
+    // int idxF = flatIdx(c + ivec3( 0,  0,  1));
+    // int idxB = flatIdx(c + ivec3( 0,  0, -1));
 
     if (walls[idx] != 0) {
         velocityDst[idx] = vec4(0.0);
@@ -104,24 +125,33 @@ void main() {
         ay += u_TemperatureBuoyancyStrength * heat;
     }
 
-    vel.y += ay * u_Dt;
 
     // apply baroclinic torque
     float invTwoH = 1.0 / (2.0 * u_CellSize);
 
-    float densityR = smokeDensity[idxR];
-    float densityL = smokeDensity[idxL];
-    float densityU = smokeDensity[idxU];
-    float densityD = smokeDensity[idxD];
-    float densityF = smokeDensity[idxF];
-    float densityB = smokeDensity[idxB];
+    ivec3 cR = c + ivec3( 1,  0,  0);
+    ivec3 cL = c + ivec3(-1,  0,  0);
+    ivec3 cU = c + ivec3( 0,  1,  0);
+    ivec3 cD = c + ivec3( 0, -1,  0);
+    ivec3 cF = c + ivec3( 0,  0,  1);
+    ivec3 cB = c + ivec3( 0,  0, -1);
 
-    float tempR = velocitySrc[idxR].w;
-    float tempL = velocitySrc[idxL].w;
-    float tempU = velocitySrc[idxU].w;
-    float tempD = velocitySrc[idxD].w;
-    float tempF = velocitySrc[idxF].w;
-    float tempB = velocitySrc[idxB].w;
+    float densityC = density;
+    float tempC = temp;
+
+    float densityR = sampleDensityClamped(cR, densityC);
+    float densityL = sampleDensityClamped(cL, densityC);
+    float densityU = sampleDensityClamped(cU, densityC);
+    float densityD = sampleDensityClamped(cD, densityC);
+    float densityF = sampleDensityClamped(cF, densityC);
+    float densityB = sampleDensityClamped(cB, densityC);
+
+    float tempR = sampleTempClamped(cR, tempC);
+    float tempL = sampleTempClamped(cL, tempC);
+    float tempU = sampleTempClamped(cU, tempC);
+    float tempD = sampleTempClamped(cD, tempC);
+    float tempF = sampleTempClamped(cF, tempC);
+    float tempB = sampleTempClamped(cB, tempC);
 
     vec3 gradDensity = vec3(
         densityR - densityL,
@@ -137,7 +167,7 @@ void main() {
 
     vec3 baroclinic = cross(gradDensity, gradTemp);
     
-    vel += u_BaroclinicStrength * baroclinic * u_Dt;
+    
 
     if (u_VacuumActive == 1) {
         // Work in voxel-grid space so radius is in voxels
@@ -162,6 +192,75 @@ void main() {
             }
         }
     }
+
+
+
+    const float COHESION_STRENGTH        = 2.0;
+    const float DENSITY_THRESHOLD        = 0.05;
+    const float DENSITY_THRESHOLD_HIGH   = 0.2;
+
+    const float TEMP_COHESION_MAX        = 5.0;
+    const float TEMP_COHESION_FALLOFF    = 2.0;
+
+
+    float rhoC = sampleDensityClamped(c, densityC);
+    if (rhoC > DENSITY_THRESHOLD) {
+
+        vec3 vC = vel;
+
+        vec3 vAvg =
+            sampleVel(c + ivec3( 1, 0, 0)) +
+            sampleVel(c + ivec3(-1, 0, 0)) +
+            sampleVel(c + ivec3( 0, 1, 0)) +
+            sampleVel(c + ivec3( 0,-1, 0)) +
+            sampleVel(c + ivec3( 0, 0, 1)) +
+            sampleVel(c + ivec3( 0, 0,-1));
+        vAvg /= 6.0;
+
+        float vLen   = length(vC);
+        float avgLen = length(vAvg);
+
+        float alignment = 0.0;
+        if (vLen > 1e-4 && avgLen > 1e-4) {
+            alignment = max(dot(vC / vLen, vAvg / avgLen), 0.0);
+        }
+
+        float rhoR = sampleDensityClamped(c + ivec3( 1, 0, 0), densityC);
+        float rhoL = sampleDensityClamped(c + ivec3(-1, 0, 0), densityC);
+        float rhoF = sampleDensityClamped(c + ivec3( 0, 1, 0), densityC);
+        float rhoB = sampleDensityClamped(c + ivec3( 0,-1, 0), densityC);
+        float rhoT = sampleDensityClamped(c + ivec3( 0, 0, 1), densityC);
+        float rhoD = sampleDensityClamped(c + ivec3( 0, 0,-1), densityC);
+
+        vec3 gradRho = vec3(
+            rhoR - rhoL,
+            rhoF - rhoB,
+            rhoT - rhoD
+        );
+
+        float gradLen = length(gradRho);
+        if (gradLen > 1e-4) {
+
+            vec3 cohesionDir = gradRho / gradLen;
+
+            // Only strongly aligned flow contributes
+            float alignMask = pow(alignment, 4.0);
+
+            // Density gating (smooth ramp)
+            float densityMask = smoothstep(DENSITY_THRESHOLD, DENSITY_THRESHOLD_HIGH, rhoC);
+
+            // Temperature attenuation
+            float tempMask = 1.0 - clamp(temp / TEMP_COHESION_MAX, 0.0, 1.0);
+            tempMask = pow(tempMask, TEMP_COHESION_FALLOFF);
+
+            float cohesionWeight = alignMask * densityMask * tempMask;
+
+            vel += cohesionDir * COHESION_STRENGTH * cohesionWeight * u_Dt * 0.5;
+        }
+    }
+
+    vel += u_BaroclinicStrength * baroclinic * u_Dt;
+    vel.y += ay * u_Dt;
 
     velocityDst[idx] = vec4(vel, temp);
 }

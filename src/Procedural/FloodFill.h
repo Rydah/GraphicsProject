@@ -23,7 +23,7 @@ public:
     glm::ivec3 seedCoord    = glm::ivec3(0);
     glm::vec3  seedWorldPos = glm::vec3(0);
 
-    int maxSeedValue = 12;       // ellipsoid Y semi-axis in voxels
+    int maxSeedValue = 8;       // ellipsoid Y semi-axis in voxels
     float elapsedTime = 0.0f;
     float fillDuration = 1.0f;
     bool active = false;

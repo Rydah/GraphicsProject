@@ -567,6 +567,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             raymarcher.render(
                 smoke.getSrcDensity(),
                 voxelizer.staticVoxels,
+                smoke.getSrcVelocity(),
                 depthPass.depthTex,
                 worleyNoise.texture,
                 voxelizer.domain,
@@ -740,10 +741,18 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
                 smoke.clear();
             }
             ImGui::TextDisabled("Default seed is at center of the scene. Right-click on surfaces to seed.");
-            static int expansionSpeed = 1;
-            if (ImGui::SliderInt("Expansion Speed", &expansionSpeed, 1, 8))
+            static int expansionSpeed = smokeSystem.getFloodFillStepsPerFrame();
+            if (ImGui::SliderInt("Expansion Speed", &expansionSpeed, 1, 8)) {
                 smokeSystem.setFloodFillStepsPerFrame(expansionSpeed);
+            }
             ImGui::Checkbox("Advect Smoke", &solver.advectSmokeEnabled);
+
+            if (ImGui::SliderInt("Grenade Size", &floodFill.maxSeedValue, 1, 20));
+
+            static float grenadeImpulseDuration = smokeSystem.getGrenadeImpulseLength();
+            if (ImGui::SliderFloat("Grenade Impulse duration", &grenadeImpulseDuration, 1.0f, 10.0f)) {
+                smokeSystem.setGrenadeImpulseLength(grenadeImpulseDuration);
+            }
         }
 
         // --- Light ---
@@ -786,6 +795,11 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
         // --- SMoke Behaviour ---
         if (ImGui::CollapsingHeader("Smoke Behaviour")) {
+            bool useFireMode = raymarcher.fireMode == 1;
+            if (ImGui::Checkbox("Fire Mode", &useFireMode)) {
+                raymarcher.fireMode = useFireMode ? 1:0;
+            }
+
             float smokeSeedDensity = smokeSystem.getFloodFillSmokeInjectStrength();
             if (ImGui::SliderFloat("Smoke Seed Density", &smokeSeedDensity, 0.0f, 10.0f)) {
                 smokeSystem.setFloodFillSmokeInjectStrength(smokeSeedDensity);
@@ -797,7 +811,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             }
 
             float smokeSeedTemp = smokeSystem.getFloodFillTempInjectStrength();
-            if (ImGui::SliderFloat("Smoke Seed Temperature", &smokeSeedTemp, 0.0f, 400.0f)) {
+            if (ImGui::SliderFloat("Smoke Seed Temperature", &smokeSeedTemp, -100.0f, 350.0f)) {
                 smokeSystem.setFloodFillTempInjectStrength(smokeSeedTemp);
             }
 
@@ -813,7 +827,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
                 solver.setSmokeDiffsionRate(smokeDiffRate);
             }
 
-            ImGui::SliderInt("Pressure Iterations", &solver.pressureIterations, 0, 2000);
+            ImGui::SliderInt("Pressure Iterations", &solver.pressureIterations, 0, 1000);
 
         }
 
@@ -859,7 +873,7 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             }
 
             float gravity = solver.getGravity();
-            if (ImGui::SliderFloat("Gravity Strength", &gravity, 0.0f, 2.0f)) {
+            if (ImGui::SliderFloat("Gravity Strength", &gravity, 0.0f, 10.0f)) {
                 solver.setGravity(gravity);
             }
 
@@ -882,7 +896,6 @@ glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
             ImGui::SliderFloat("Duration (s)",    &vac.duration,  0.5f, 10.0f);
             ImGui::SliderFloat("Strength",        &vac.strength,  0.0f, 50.0f);
             ImGui::SliderFloat("Radius (world)",  &vac.radius,    0.1f,  8.0f);
-            ImGui::SliderFloat("Pressure",        &vac.pressure, -50.0f, -0.1f);
             if (vac.active && ImGui::Button("Cancel Vacuum"))
                 vac.active = false;
         }

@@ -5,9 +5,9 @@
 
 class ApplyForces {
 public:
-    int buoyancyMode = 0;
+    int buoyancyMode = 1;
     float gravityStrength  = 0.05f;
-    float BaroclinicStrength = 0.15f;
+    float BaroclinicStrength = 0.25f;
 
     // Legacy implementation
     float buoyancyStrength = 1.0f;
@@ -22,7 +22,7 @@ public:
         float     elapsed  = 0.0f;
         float     duration = 5.0f;    // seconds before auto-dissipation
         float     strength = 8.5f;   // inward acceleration (world-units/s^2)
-        float     radius   = 2.0f;    // world-space influence radius
+        float     radius   = 4.0f;    // world-space influence radius
         float     pressure = -5.0f;   // negative pressure injected at vacuum voxel (Dirichlet BC)
         glm::vec3 worldPos = glm::vec3(0.0f);
     } vacuum;

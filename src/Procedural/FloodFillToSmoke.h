@@ -5,8 +5,9 @@
 #include "Voxel/VoxelDomain.h"
 
 constexpr float DEFAULT_VELOCITY_INJECT_STRENGTH = 0.1f;
-constexpr float DEFAULT_SMOKEDENSE_INJECT_STRENGTH = 0.8f;
+constexpr float DEFAULT_SMOKEDENSE_INJECT_STRENGTH = 0.75f;
 constexpr float DEFAULT_SMOKETEMP_INJECT_STRENTH = 30.0f;
+constexpr float DEFAULT_GRENADE_IMPULSE_LENGTH = 3.5f;
 
 /* Wrapper class for injecting flood-fill-derived source terms into the smoke simulation.
 
@@ -54,6 +55,7 @@ public:
     void destroy();
 
     // Tunable parameters to proceduralsmokesystem
+    float grenadeImpulseLength_ = DEFAULT_GRENADE_IMPULSE_LENGTH;
     float velocityInjectStrength_ = DEFAULT_VELOCITY_INJECT_STRENGTH;
     float smokeDenseInjectStrength_ = DEFAULT_SMOKEDENSE_INJECT_STRENGTH;
     float tempInjectStrenth_ = DEFAULT_SMOKETEMP_INJECT_STRENTH;

@@ -39,10 +39,13 @@ public:
     float edgeFadeWidth  = 0.3f;
     float curlStrength   = 1.0f;
     float noiseStrength  = 0.85f;
-    float noiseScale     = 2.0f;
-    float hazeFloor      = 0.0f;   // 0 = many holes, 1 = smooth blob
+    float noiseScale     = 1.5f;
+    float hazeFloor      = 0.1f;   // 0 = many holes, 1 = smooth blob
     // Internal raymarch render scale (1.0 = full-res, 0.5 = half-res, 0.25 = quarter-res).
     float resolutionScale = 0.5f;
+
+    // Firemode (if set to 1 smoke emits light if it is hot enough)
+    int fireMode = 0;
 
     void init(int fullWidth, int fullHeight) {
         halfW = std::max(1, (int)(fullWidth  * resolutionScale));
@@ -69,6 +72,7 @@ public:
 
     void render(const SSBOBuffer& smokeBuf,
             const SSBOBuffer& wallBuf,
+            const SSBOBuffer& velocityBuf,
             const Texture2D&  depthTex,
             const Texture3D&  noiseTex,
             const VoxelDomain& domain,
@@ -91,6 +95,7 @@ public:
 
         smokeBuf.bindBase(0);
         wallBuf.bindBase(1);
+        velocityBuf.bindBase(2);
 
         marchCS.use();
         marchCS.setMat4 ("u_InvView",      invView);
@@ -117,6 +122,8 @@ public:
         marchCS.setFloat("u_NoiseStrength", noiseStrength);
         marchCS.setFloat("u_NoiseScale",    noiseScale);
         marchCS.setFloat("u_HazeFloor",     hazeFloor);
+
+        marchCS.setInt("u_FireMode", fireMode);
 
         glUniform2i(glGetUniformLocation(marchCS.ID, "u_TexSize"), halfW, halfH);
 

@@ -33,6 +33,9 @@ public:
 
     void setFloodFillTempInjectStrength(float temp) { floodFillToSmoke_.tempInjectStrenth_ = temp; } // seeded smoke temperature
     float getFloodFillTempInjectStrength() { return floodFillToSmoke_.tempInjectStrenth_; }
+    
+    void setGrenadeImpulseLength(float duration) {floodFillToSmoke_.grenadeImpulseLength_ = duration;}
+    float getGrenadeImpulseLength() { return floodFillToSmoke_.grenadeImpulseLength_; }
     // Add in other tunable parameters here
 
 private:

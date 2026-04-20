@@ -28,6 +28,9 @@ layout(std430, binding = 0) readonly buffer SmokeBuf { float smokeDensity[]; };
 // Wall SSBO
 layout(std430, binding = 1) readonly buffer WallBuf  { int walls[]; };
 
+// Velocity (for temperature) SSBO
+layout(std430, binding = 2) readonly buffer VelocityBuf { vec4 velocityField[]; };
+
 // Camera
 uniform mat4  u_InvView;
 uniform mat4  u_InvProj;
@@ -57,6 +60,9 @@ uniform float u_NoiseStrength;
 uniform float u_NoiseScale;    // puff frequency: cells visible across volume (default 3.0)
 uniform float u_HazeFloor;     // 0 = many holes, 1 = smooth blob (default 0.3)
 
+// Fire mode toggle
+uniform int u_FireMode;
+
 // Texture output size
 uniform ivec2 u_TexSize;
 
@@ -69,6 +75,32 @@ int flatIdx(ivec3 c) {
 
 bool inBounds(ivec3 c) {
     return all(greaterThanEqual(c, ivec3(0))) && all(lessThan(c, u_GridSize));
+}
+
+// trilinear temp sample
+float sampleTemp(vec3 worldPos) {
+    vec3 gc = (worldPos - u_BoundsMin) / u_VoxelSize - 0.5;
+    ivec3 c0 = ivec3(floor(gc));
+    ivec3 c1 = c0 + 1;
+    vec3  t  = fract(gc);
+
+    c0 = clamp(c0, ivec3(0), u_GridSize - 1);
+    c1 = clamp(c1, ivec3(0), u_GridSize - 1);
+
+    float v000 = velocityField[flatIdx(ivec3(c0.x, c0.y, c0.z))].w;
+    float v100 = velocityField[flatIdx(ivec3(c1.x, c0.y, c0.z))].w;
+    float v010 = velocityField[flatIdx(ivec3(c0.x, c1.y, c0.z))].w;
+    float v110 = velocityField[flatIdx(ivec3(c1.x, c1.y, c0.z))].w;
+    float v001 = velocityField[flatIdx(ivec3(c0.x, c0.y, c1.z))].w;
+    float v101 = velocityField[flatIdx(ivec3(c1.x, c0.y, c1.z))].w;
+    float v011 = velocityField[flatIdx(ivec3(c0.x, c1.y, c1.z))].w;
+    float v111 = velocityField[flatIdx(ivec3(c1.x, c1.y, c1.z))].w;
+
+    return mix(
+        mix(mix(v000, v100, t.x), mix(v010, v110, t.x), t.y),
+        mix(mix(v001, v101, t.x), mix(v011, v111, t.x), t.y),
+        t.z
+    );
 }
 
 // Trilinear smoke sample
@@ -326,7 +358,35 @@ void main() {
             vec3 ambientLight = vec3(0.25, 0.27, 0.30);
             vec3 Li = u_LightColor * shadowT * lightMult * phase + ambientLight;
 
-            color         += transmittance * u_SigmaS * density * Li * fineStep;
+            vec3 emission = vec3(0.0, 0.0, 0.0);
+
+            if (u_FireMode == 1) {
+                float temp = sampleTemp(pos);
+
+                const float EMISSION_START  = 130.0;
+                const float EMISSION_FULL   = 250.0;
+                const float EMISSION_SCALE  = 0.7;
+                const float EMISSION_EXP    = 1.25;
+                const float EMISSION_WHITEN = 0.1;
+
+                // Smooth activation
+                float heatMask = smoothstep(EMISSION_START, EMISSION_FULL, temp);
+                float extraHeat = max(temp - 220.0, 0.0);
+
+                // Strength
+                float emissionStrength = EMISSION_SCALE * pow(heatMask, EMISSION_EXP) + 0.1 * extraHeat;
+
+                // Color
+                vec3 emissionColor = mix(
+                    vec3(1.0, 0.20, 0.06),
+                    vec3(1.0, 0.8, 0.6),
+                    clamp(heatMask * EMISSION_WHITEN * 10.0, 0.0, 1.0)
+                );
+
+                emission = emissionColor * emissionStrength * density;
+            }
+
+            color += transmittance * (u_SigmaS * density * Li + emission) * fineStep;
             transmittance *= exp(-sigmaE * density * fineStep);
 
             if (transmittance < 0.01) break;

@@ -102,7 +102,7 @@ void FloodFillToSmoke::injectAll(
         destSmokeDensityBuf,
         wallBuf
     );
-    if (elapsedTime < 2.5f) {
+    if (elapsedTime < grenadeImpulseLength_) {
         injectVelocity(
             floodFillBuf,
             floodFillMaxValue,
