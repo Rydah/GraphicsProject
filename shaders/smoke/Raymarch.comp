@@ -361,11 +361,11 @@ void main() {
             vec3 emission = vec3(0.0, 0.0, 0.0);
 
             if (u_FireMode == 1) {
-                float temp = sampleTemp(pos);
+                float temp = mix(sampleTemp(pos), sampleTemp(warpedPos), 0.5);
 
                 const float EMISSION_START  = 130.0;
                 const float EMISSION_FULL   = 250.0;
-                const float EMISSION_SCALE  = 0.7;
+                const float EMISSION_SCALE  = 0.6;
                 const float EMISSION_EXP    = 1.25;
                 const float EMISSION_WHITEN = 0.1;
 
