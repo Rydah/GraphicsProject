@@ -365,7 +365,7 @@ void main() {
 
                 const float EMISSION_START  = 130.0;
                 const float EMISSION_FULL   = 250.0;
-                const float EMISSION_SCALE  = 0.6;
+                const float EMISSION_SCALE  = 0.3;
                 const float EMISSION_EXP    = 1.25;
                 const float EMISSION_WHITEN = 0.1;
 
@@ -380,7 +380,7 @@ void main() {
                 vec3 emissionColor = mix(
                     vec3(1.0, 0.20, 0.06),
                     vec3(1.0, 0.8, 0.6),
-                    clamp(heatMask * EMISSION_WHITEN * 10.0, 0.0, 1.0)
+                    clamp(heatMask * EMISSION_WHITEN, 0.0, 1.0)
                 );
 
                 emission = emissionColor * emissionStrength * density;
